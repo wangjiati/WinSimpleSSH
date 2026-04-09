@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net452</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SSHClient</AssemblyName>
+    <RootNamespace>SSHClient</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WebSocketSharp" Version="1.0.3-rc9" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\SSHCommon\SSHCommon.csproj" />
+  </ItemGroup>
+</Project>

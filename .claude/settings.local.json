@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xxd \"D:/0_projects/SSH/头脑风暴.txt\")",
+      "Bash(dotnet --version)",
+      "Bash(where msbuild:*)",
+      "Read(//c/Program Files \\(x86\\)/Reference Assemblies/Microsoft/Framework/.NETFramework/**)",
+      "Bash(dotnet restore:*)",
+      "Bash(dotnet build:*)",
+      "Bash(\"D:/0_projects/SSH/src/SSHServer/bin/Debug/net452/SSHServer.exe\")",
+      "Bash(kill %1)",
+      "Bash(./SSHServer.exe)",
+      "Bash(taskkill //F //IM SSHServer.exe)"
+    ]
+  }
+}
