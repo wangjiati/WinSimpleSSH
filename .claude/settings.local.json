@@ -14,7 +14,9 @@
       "Bash(gh repo:*)",
       "Bash(where gh:*)",
       "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" repo edit --default-branch main)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(taskkill //F //IM SSHC.exe)",
+      "Bash(taskkill //F //IM SSHClient.exe)"
     ]
   }
 }
