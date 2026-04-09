@@ -10,7 +10,10 @@
       "Bash(\"D:/0_projects/SSH/src/SSHServer/bin/Debug/net452/SSHServer.exe\")",
       "Bash(kill %1)",
       "Bash(./SSHServer.exe)",
-      "Bash(taskkill //F //IM SSHServer.exe)"
+      "Bash(taskkill //F //IM SSHServer.exe)",
+      "Bash(gh repo:*)",
+      "Bash(where gh:*)",
+      "Bash(\"/c/Program Files/GitHub CLI/gh.exe\" repo edit --default-branch main)"
     ]
   }
 }
