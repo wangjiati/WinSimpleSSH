@@ -320,7 +320,7 @@ namespace SSHClient
             Console.WriteLine("SSH 客户端 - 基于 WebSocket 的简易 SSH 工具");
             Console.WriteLine();
             Console.WriteLine("=== Usage / 用法 ===");
-            Console.WriteLine("  SSHClient.exe connect <host> [-p <port>] -u <username>");
+            Console.WriteLine("  SSHC.exe connect <host> [-p <port>] -u <username>");
             Console.WriteLine();
             Console.WriteLine("=== Options / 选项 ===");
             Console.WriteLine("  -p <port>      Server port (default: 22222) / 服务端口（默认: 22222）");
