@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Principal;
 using SSHServer.Config;
 using SSHServer.Core;
 using WsLogLevel = WebSocketSharp.LogLevel;
@@ -37,6 +38,28 @@ namespace SSHServer
             ConnectionManager.StartTimeoutTimer();
 
             SLog.Info($"SSH Server started on port {config.Port}");
+
+            // 记录管理员权限状态
+            var isAdmin = IsRunningAsAdmin();
+            SLog.Info(isAdmin
+                ? "服务端以管理员权限运行 / Running as Administrator"
+                : "服务端以普通权限运行 / Running as standard user");
+        }
+
+        private bool IsRunningAsAdmin()
+        {
+            try
+            {
+                using (var identity = WindowsIdentity.GetCurrent())
+                {
+                    var principal = new WindowsPrincipal(identity);
+                    return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public void Stop()
