@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using Newtonsoft.Json;
 using WebSocketSharp;
@@ -11,19 +10,19 @@ namespace SSHClient.Core
     {
         private const int ChunkSize = 65536; // 64KB
 
-        public static void Upload(WebSocket ws, string localPath, string remotePath)
+        /// <summary>发送上传开始消息，返回是否成功读取本地文件</summary>
+        public static bool SendUploadStart(object sendLock, WebSocket ws, string localPath, string remotePath)
         {
             if (!File.Exists(localPath))
             {
                 Console.WriteLine($"File not found: {localPath}");
-                return;
+                return false;
             }
 
             var fileInfo = new FileInfo(localPath);
             var fileData = File.ReadAllBytes(localPath);
             var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
 
-            // Send upload start
             var startMsg = new ProtocolMessage(MessageType.UploadStart,
                 JsonConvert.SerializeObject(new FileTransferStart
                 {
@@ -33,9 +32,28 @@ namespace SSHClient.Core
                     TotalChunks = totalChunks,
                     RemotePath = remotePath ?? Path.GetFileName(localPath)
                 }));
-            ws.Send(startMsg.ToJson());
+            SendLocked(sendLock, ws, startMsg.ToJson());
 
-            // Send chunks
+            // 暂存文件数据供 SendUploadChunks 使用
+            _pendingUploadData = fileData;
+            _pendingUploadInfo = fileInfo;
+            return true;
+        }
+
+        [ThreadStatic]
+        private static byte[] _pendingUploadData;
+        [ThreadStatic]
+        private static FileInfo _pendingUploadInfo;
+
+        /// <summary>发送所有数据块和完成消息（需在 SendUploadStart 成功且收到 UploadReady 后调用）</summary>
+        public static void SendUploadChunks(object sendLock, WebSocket ws, string localPath)
+        {
+            var fileData = _pendingUploadData;
+            var fileInfo = _pendingUploadInfo;
+            if (fileData == null) return;
+
+            var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
+
             for (int i = 0; i < totalChunks; i++)
             {
                 var offset = i * ChunkSize;
@@ -49,25 +67,33 @@ namespace SSHClient.Core
                         Index = i,
                         Data = Convert.ToBase64String(chunk)
                     }));
-                ws.Send(chunkMsg.ToJson());
+                SendLocked(sendLock, ws, chunkMsg.ToJson());
 
-                // Progress
                 var progress = (double)(i + 1) / totalChunks;
                 DrawProgressBar(progress, fileInfo.Length, offset + length);
             }
 
-            // Send upload complete
             var completeMsg = new ProtocolMessage(MessageType.UploadComplete, "");
-            ws.Send(completeMsg.ToJson());
+            SendLocked(sendLock, ws, completeMsg.ToJson());
 
             Console.WriteLine();
+            _pendingUploadData = null;
+            _pendingUploadInfo = null;
         }
 
-        public static void Download(WebSocket ws, string remotePath, string localPath)
+        public static void Download(object sendLock, WebSocket ws, string remotePath, string localPath)
         {
-            // Send download request
-            var startMsg = new ProtocolMessage(MessageType.DownloadStart, $"\"{remotePath}\"");
-            ws.Send(startMsg.ToJson());
+            var startMsg = new ProtocolMessage(MessageType.DownloadStart, remotePath);
+            SendLocked(sendLock, ws, startMsg.ToJson());
+        }
+
+        private static void SendLocked(object sendLock, WebSocket ws, string data)
+        {
+            lock (sendLock)
+            {
+                if (ws?.IsAlive == true)
+                    ws.Send(data);
+            }
         }
 
         public static void HandleDownloadMessage(ProtocolMessage msg, string localPath, ref DownloadState state)

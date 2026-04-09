@@ -16,6 +16,7 @@ namespace SSHCommon.Protocol
 
         // 文件上传 (客户端→服务端)
         UploadStart,
+        UploadReady,
         UploadChunk,
         UploadComplete,
 

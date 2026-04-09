@@ -69,30 +69,41 @@ namespace SSHClient
 
             var shell = new RemoteShell();
             var authResult = new ManualResetEvent(false);
-
-            shell.SetOutputHandler(signal =>
-            {
-                if (signal == "AUTH_OK" || signal == "AUTH_FAIL")
-                    authResult.Set();
-            });
+            var authSuccess = new bool[1];
+            var downloadState = new SSHClient.Core.DownloadState[1];
+            var downloadLocalPath = new string[1];
 
             shell.SetOutputHandler(signal =>
             {
                 if (signal.StartsWith("MSG:"))
                 {
-                    // 下载消息转发给 FileTransfer 处理
+                    var json = signal.Substring(4);
+                    try
+                    {
+                        var msg = ProtocolMessage.FromJson(json);
+                        FileTransfer.HandleDownloadMessage(msg, downloadLocalPath[0], ref downloadState[0]);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"\nDownload error: {ex.Message} / 下载错误: {ex.Message}");
+                    }
                 }
                 else if (signal.StartsWith("CLIENTLIST:"))
                 {
-                    var json = signal.Substring("CLIENTLIST:".Length);
+                    var clientListJson = signal.Substring("CLIENTLIST:".Length);
                     try
                     {
-                        var list = JsonConvert.DeserializeObject<ClientListData>(json);
+                        var list = JsonConvert.DeserializeObject<ClientListData>(clientListJson);
                         PrintClientList(list);
                     }
                     catch { }
                 }
-                else if (signal == "AUTH_OK" || signal == "AUTH_FAIL")
+                else if (signal == "AUTH_OK")
+                {
+                    authSuccess[0] = true;
+                    authResult.Set();
+                }
+                else if (signal == "AUTH_FAIL")
                 {
                     authResult.Set();
                 }
@@ -103,9 +114,10 @@ namespace SSHClient
 
             authResult.WaitOne(10000);
 
-            if (!shell.IsConnected)
+            if (!authSuccess[0])
             {
-                Console.WriteLine("Connection failed. / 连接失败");
+                Console.WriteLine("认证失败，程序退出 / Authentication failed");
+                shell.Disconnect();
                 return;
             }
 
@@ -127,6 +139,13 @@ namespace SSHClient
                     input.Equals("quit", StringComparison.OrdinalIgnoreCase))
                 {
                     break;
+                }
+
+                if (input.Equals("cls", StringComparison.OrdinalIgnoreCase) ||
+                    input.Equals("clear", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Clear();
+                    continue;
                 }
 
                 if (input.Equals("help", StringComparison.OrdinalIgnoreCase))
@@ -164,7 +183,11 @@ namespace SSHClient
                 {
                     var parts = SplitTransferCommand(input.Substring(9));
                     if (parts != null)
+                    {
+                        downloadLocalPath[0] = parts.Length > 1 ? parts[1] : null;
+                        downloadState[0] = null;
                         shell.Download(parts[0], parts.Length > 1 ? parts[1] : null);
+                    }
                     continue;
                 }
 
@@ -309,9 +332,35 @@ namespace SSHClient
 
         static string[] SplitTransferCommand(string args)
         {
-            var parts = args.Trim().Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0) return null;
-            return parts;
+            var parts = new List<string>();
+            var current = "";
+            var inQuotes = false;
+
+            foreach (var ch in args.Trim())
+            {
+                if (ch == '"')
+                {
+                    inQuotes = !inQuotes;
+                }
+                else if ((ch == ' ' || ch == '\t') && !inQuotes)
+                {
+                    if (current.Length > 0)
+                    {
+                        parts.Add(current);
+                        current = "";
+                    }
+                }
+                else
+                {
+                    current += ch;
+                }
+            }
+
+            if (current.Length > 0)
+                parts.Add(current);
+
+            if (parts.Count == 0) return null;
+            return parts.ToArray();
         }
 
         static void PrintUsage()

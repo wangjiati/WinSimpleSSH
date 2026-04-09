@@ -6,7 +6,9 @@ namespace SSHServer.Core
     public class ClientSession
     {
         public string ConnectionId { get; set; }
+        public string ShortId => ConnectionId?.Length > 8 ? ConnectionId.Substring(0, 8) : ConnectionId ?? "unknown";
         public string Username { get; set; }
+        public string Tag => $"{Username ?? "unknown"}({ShortId})";
         public string RemoteEndpoint { get; set; }
         public DateTime ConnectTime { get; set; }
         public DateTime LastActivity { get; set; }

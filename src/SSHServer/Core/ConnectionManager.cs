@@ -126,7 +126,7 @@ namespace SSHServer.Core
                         session.Send(new ProtocolMessage(MessageType.TimeoutWarning,
                             JsonConvert.SerializeObject(new TimeoutWarningData { SecondsRemaining = 10 })));
 
-                        SLog.Warn($"[Timeout] 警告已发送: {session.Username} ({session.ConnectionId})");
+                        SLog.Warn($"[Timeout] 警告已发送: {session.Tag}");
                     }
 
                     // 警告后10秒仍无活动，断开连接
@@ -147,7 +147,7 @@ namespace SSHServer.Core
 
             foreach (var s in toClose)
             {
-                SLog.Warn($"[Timeout] 断开超时客户端: {s.Username} ({s.ConnectionId})");
+                SLog.Warn($"[Timeout] 断开超时客户端: {s.Tag}");
                 s.CloseConnection?.Invoke();
             }
         }
@@ -171,7 +171,7 @@ namespace SSHServer.Core
                 _sessions[ID] = _session;
             }
 
-            SLog.Info($"[Connect] {ID} from {_session.RemoteEndpoint}");
+            SLog.Info($"[Connect] {_session.ShortId} from {_session.RemoteEndpoint}");
         }
 
         protected override void OnMessage(MessageEventArgs e)
@@ -188,7 +188,7 @@ namespace SSHServer.Core
         {
             // 客户端异常断开(Code=1006)是预期行为，仅记录警告
             var level = e.Code == 1006 ? LogLevel.Warn : LogLevel.Info;
-            SLog.Write(level, $"[Disconnect] {ID} ({_session?.Username ?? "unknown"}): Code={e.Code} Reason={e.Reason}");
+            SLog.Write(level, $"[Disconnect] {_session?.Tag ?? ID}: Code={e.Code} Reason={e.Reason}");
 
             lock (_lock)
             {
@@ -211,7 +211,7 @@ namespace SSHServer.Core
             }
             catch
             {
-                SLog.Warn($"[Message] Invalid message format from {_session?.Username ?? "unknown"}");
+                SLog.Warn($"[Message] Invalid message format from {_session?.Tag ?? "unknown"}");
                 SendError("Invalid message format");
                 return;
             }
@@ -228,12 +228,18 @@ namespace SSHServer.Core
 
                 case MessageType.ShellInput:
                     if (RequireAuth())
+                    {
+                        var input = msg.Data?.TrimEnd('\n', '\r');
+                        if (!string.IsNullOrEmpty(input))
+                            SLog.Info($"[Shell] {_session.Tag} 执行命令: {input}");
                         _session.Shell?.WriteInput(msg.Data);
+                    }
                     break;
 
                 case MessageType.Interrupt:
                     if (RequireAuth())
                     {
+                        SLog.Info($"[Shell] {_session.Tag} 中断命令 (Ctrl+C)");
                         _session.Shell?.Interrupt();
                         StartShell();
                     }
@@ -283,7 +289,7 @@ namespace SSHServer.Core
                         JsonConvert.SerializeObject(new AuthResponse { Success = true, Message = "Authenticated" })));
                     StartShell();
 
-                    SLog.Info($"[Auth] {ID} authenticated as {req.Username}");
+                    SLog.Info($"[Auth] {_session.ShortId} authenticated as {req.Username}");
                     return;
                 }
             }
@@ -321,11 +327,25 @@ namespace SSHServer.Core
             {
                 _session.FileTransfer.ParseUploadStart(data);
                 _session.FileTransfer.StartUpload(Environment.CurrentDirectory);
+
+                // StartUpload 成功，发送 UploadReady 让客户端开始发数据
+                SLog.Info($"[Upload] {_session.Tag} 开始上传: {_session.FileTransfer.CurrentUploadPath}");
+                _session.Send(new ProtocolMessage(MessageType.UploadReady, ""));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                SLog.Error($"[Upload] {_session.Tag} 无写入权限: {_session.FileTransfer.CurrentUploadPath}");
+                SendError($"无写入权限 / Access denied: {_session.FileTransfer.CurrentUploadPath}");
+            }
+            catch (System.Security.SecurityException)
+            {
+                SLog.Error($"[Upload] {_session.Tag} 无写入权限: {_session.FileTransfer.CurrentUploadPath}");
+                SendError($"无写入权限 / Access denied: {_session.FileTransfer.CurrentUploadPath}");
             }
             catch (Exception ex)
             {
                 SLog.Error($"Upload start failed", ex);
-                SendError($"Upload start failed: {ex.Message}");
+                SendError($"Upload failed: {ex.Message}");
             }
         }
 
@@ -333,18 +353,28 @@ namespace SSHServer.Core
         {
             try
             {
-                _session.FileTransfer.WriteChunk(data);
+                if (!_session.FileTransfer.WriteChunk(data))
+                {
+                    // 上传未开始或已结束，静默忽略多余的 chunk
+                }
             }
             catch (Exception ex)
             {
                 SLog.Error($"Upload chunk failed", ex);
-                SendError($"Upload chunk failed: {ex.Message}");
             }
         }
 
         private void HandleUploadComplete()
         {
             var result = _session.FileTransfer.FinishUpload();
+            if (result.Success)
+            {
+                SLog.Info($"[Upload] {_session.Tag} 上传完成: {result.FileName}");
+            }
+            else
+            {
+                SLog.Warn($"[Upload] {_session.Tag} 上传未正常完成");
+            }
             _session.Send(new ProtocolMessage(MessageType.UploadComplete,
                 JsonConvert.SerializeObject(result)));
         }
@@ -354,13 +384,31 @@ namespace SSHServer.Core
             try
             {
                 var remotePath = data?.Trim('"');
-                var startInfo = FileTransferHandler.PrepareDownload(remotePath, out var fileData);
+                SLog.Info($"[Download] {_session.Tag} 下载文件: {remotePath}");
 
-                if (startInfo == null)
+                // 检查文件是否存在
+                if (!File.Exists(remotePath))
                 {
-                    SendError($"File not found: {remotePath}");
+                    SendError($"文件不存在 / File not found: {remotePath}");
                     return;
                 }
+
+                // 检查文件是否可读
+                try
+                {
+                    using (var fs = new FileStream(remotePath, FileMode.Open, FileAccess.Read))
+                    {
+                        // 仅测试打开，立即关闭
+                    }
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    SLog.Error($"[Download] {_session.Tag} 无读取权限: {remotePath}");
+                    SendError($"无读取权限 / Access denied: {remotePath}");
+                    return;
+                }
+
+                var startInfo = FileTransferHandler.PrepareDownload(remotePath, out var fileData);
 
                 _session.Send(new ProtocolMessage(MessageType.DownloadStart,
                     JsonConvert.SerializeObject(startInfo)));

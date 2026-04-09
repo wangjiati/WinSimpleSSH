@@ -11,6 +11,18 @@ namespace SSHClient.Core
         private WebSocket _ws;
         private Timer _heartbeatTimer;
         private Action<string> _onOutput;
+        private readonly object _sendLock = new object();
+        private readonly object _uploadLock = new object();
+        private bool _uploadReady;
+
+        private void SafeSend(string data)
+        {
+            lock (_sendLock)
+            {
+                if (_ws?.IsAlive == true)
+                    _ws.Send(data);
+            }
+        }
 
         public void Connect(string host, int port, string username, string password)
         {
@@ -46,7 +58,7 @@ namespace SSHClient.Core
                         Username = username,
                         Password = password
                     }));
-                _ws.Send(authMsg.ToJson());
+                SafeSend(authMsg.ToJson());
             }
             else
             {
@@ -65,10 +77,7 @@ namespace SSHClient.Core
             _heartbeatTimer = new Timer(30000);
             _heartbeatTimer.Elapsed += (s, e) =>
             {
-                if (_ws?.IsAlive == true)
-                {
-                    _ws.Send(new ProtocolMessage(MessageType.Ping, "").ToJson());
-                }
+                SafeSend(new ProtocolMessage(MessageType.Ping, "").ToJson());
             };
             _heartbeatTimer.Start();
         }
@@ -118,10 +127,22 @@ namespace SSHClient.Core
                 case MessageType.Error:
                     var err = JsonConvert.DeserializeObject<ErrorData>(msg.Data);
                     Console.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
+                    // 唤醒可能正在等待 UploadReady 的线程
+                    lock (_uploadLock)
+                    {
+                        System.Threading.Monitor.Pulse(_uploadLock);
+                    }
                     break;
 
                 case MessageType.Pong:
-                    // 心跳回复，无需处理
+                    break;
+
+                case MessageType.UploadReady:
+                    lock (_uploadLock)
+                    {
+                        _uploadReady = true;
+                        System.Threading.Monitor.Pulse(_uploadLock);
+                    }
                     break;
 
                 case MessageType.TimeoutWarning:
@@ -160,36 +181,57 @@ namespace SSHClient.Core
 
         public void SendInput(string input)
         {
-            if (_ws?.IsAlive != true) return;
-            _ws.Send(new ProtocolMessage(MessageType.ShellInput, input).ToJson());
+            SafeSend(new ProtocolMessage(MessageType.ShellInput, input).ToJson());
         }
 
         public void SendInterrupt()
         {
-            if (_ws?.IsAlive != true) return;
-            _ws.Send(new ProtocolMessage(MessageType.Interrupt, "").ToJson());
+            SafeSend(new ProtocolMessage(MessageType.Interrupt, "").ToJson());
         }
 
         public void Upload(string localPath, string remotePath)
         {
-            FileTransfer.Upload(_ws, localPath, remotePath);
+            StopHeartbeat();
+            try
+            {
+                if (!FileTransfer.SendUploadStart(_sendLock, _ws, localPath, remotePath))
+                    return;
+
+                // 等待服务端确认文件可写（UploadReady），最多等 10 秒
+                lock (_uploadLock)
+                {
+                    _uploadReady = false;
+                    if (!_uploadReady)
+                        System.Threading.Monitor.Wait(_uploadLock, 10000);
+
+                    if (!_uploadReady)
+                    {
+                        Console.WriteLine("Upload rejected by server / 服务端拒绝上传");
+                        return;
+                    }
+                }
+
+                FileTransfer.SendUploadChunks(_sendLock, _ws, localPath);
+            }
+            finally
+            {
+                StartHeartbeat();
+            }
         }
 
         public void Download(string remotePath, string localPath)
         {
-            FileTransfer.Download(_ws, remotePath, localPath);
+            FileTransfer.Download(_sendLock, _ws, remotePath, localPath);
         }
 
         public void ListClients()
         {
-            if (_ws?.IsAlive != true) return;
-            _ws.Send(new ProtocolMessage(MessageType.ListClients, "").ToJson());
+            SafeSend(new ProtocolMessage(MessageType.ListClients, "").ToJson());
         }
 
         public void KickClient(string connectionId)
         {
-            if (_ws?.IsAlive != true) return;
-            _ws.Send(new ProtocolMessage(MessageType.KickClient,
+            SafeSend(new ProtocolMessage(MessageType.KickClient,
                 JsonConvert.SerializeObject(new KickRequestData { ConnectionId = connectionId })).ToJson());
         }
 
