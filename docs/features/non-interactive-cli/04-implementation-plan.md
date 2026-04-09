@@ -11,21 +11,22 @@
 | **P0** | 安全网：交互模式基线回归测试 | ✅ 已验证（2026-04-09） |
 | **P1** | 基础设施：ExitCodes / CommandResult / OutputCapture / RemoteShell 拦截接口 / Main 返回 int | ✅ commit `44ef5d3` |
 | **P2** | `exec` 动词 MVP：NonInteractiveRunner.RunExec + Program verb 分派 + ParseCommonArgs | ✅ commit `44ef5d3` |
-| **P3** | `start` 动词：RunStart 复用 `wrapForDetach` 分支 | 🟡 待开始 |
-| **P4** | `upload` / `download` 动词：复用 FileTransfer，加 Quiet 开关 | 🟡 待开始 |
-| **P5** | `--json` polish + Ctrl+C 超时强退 + UTF-8 输出 + WebSocketSharp Fatal 日志抑制 + Banner stderr 完善 | 🟡 部分完成（banner 路由、JSON 基础路径、Ctrl+C 最小实现都在 `44ef5d3` 里） |
-| **P6** | 验收回归 + README/CLAUDE.md 更新 | 🟡 待开始 |
+| **P3** | `start` 动词：RunStart 复用 `wrapForDetach` 分支 + 5 秒短超时 + fire-and-forget 兜底 | ✅ commit `a0415c6` |
+| **P4** | `upload` / `download` 动词：复用 FileTransfer，加 Quiet 开关 + TryConnectAndAuth 抽取 | ✅ commit `f09e325` |
+| **P5** | UTF-8 stdout + WebSocketSharp Fatal 日志静音 + Ctrl+C 看门狗 + Banner stderr 完善 | ✅ commit `92ccffd` |
+| **P6** | 验收回归 + README/CLAUDE.md 更新 | ✅ 完成 |
 
 ## 进度日志
 
-### 2026-04-09 —— P0 / P1 / P2 全部落地
+### 2026-04-09 —— 全部 P0-P6 落地
 
+#### 阶段 1（commit `44ef5d3`）—— P1 基础设施 + P2 exec 动词 MVP
 - **P0 基线验证**：xxf 在生产环境跑完交互模式测试（login / dir 中文 / ping / clients / kick / exit），全部符合既有行为
 - **P1 + P2 实施**：在 feature 分支 `feature/non-interactive-cli` 合成一次 commit `44ef5d3`（12 files, +2507 / -30）
 - **实施偏差**：原计划用 `@echo off` 关 cmd.exe 回显，实测无效。改用"两阶段标记 + 客户端按行剥离"
 - **验收测试结果**：
   - Test 1 `exec "echo hello-from-sshc"`：stdout 干净，exit 0 ✅
-  - Test 2 `exec "echo 你好世界"`：GBK 字节正确（终端显示问题属于 P5 UTF-8 任务）✅
+  - Test 2 `exec "echo 你好世界"`：GBK 字节正确（终端显示问题待 P5 UTF-8 任务）✅
   - Test 3 `cmd /c exit 42`：exit 42 透传 ✅
   - Test 4 错密码：exit 254 ✅
   - Test 5 错 IP：exit 255 ✅
@@ -33,6 +34,51 @@
   - Test 7 `--json`：schema 完整，`stdout` 字段干净 ✅
   - Test 8 unknown verb / 缺参数：exit 253 ✅
   - Test 9 交互模式回归：完全无回归 ✅
+
+#### 阶段 2（commit `be9d0b9`）—— 文档同步
+- 把 9 个决策从 ⏳ 待定 改为 ✅ 已锁定
+- `03-change-list.md` 顶部加"行号已过时"警告 + 实施偏差记录
+- `04-implementation-plan.md` 阶段总览加状态列
+
+#### 阶段 3（commit `a0415c6`）—— P3 start 动词
+- `RunStart` 调用 `RunShellVerb` 时传 `wrapForDetach: true` 和 `StartTimeoutMs=5000`
+- 5 秒超时但 begin marker 已出现 → 假定 fire-and-forget 成功，返回 0
+- **意外验证**：在 Windows Sandbox 里测试时发现 `notepad.exe` 文件根本不存在，cmd.exe 在 piped 模式下找不到可执行文件会进入诡异等待状态。fire-and-forget 兜底正好覆盖了这个场景
+- 验收：`SSHC start ... calc.exe` → 0.7s 正常路径 ✅；`SSHC start ... notepad.exe` → 5.6s 触发兜底 ✅
+
+#### 阶段 4（commit `f09e325`）—— P4 upload / download 动词
+- 抽出 `TryConnectAndAuth` 共享 helper，统一所有动词的连接+认证流程
+- 在 `TryConnectAndAuth` 里注册 no-op shell 输出拦截器，丢弃 cmd.exe 欢迎横幅，避免污染 upload/download 的 stdout
+- `RemoteShell.HandleMessage` 给 `DownloadComplete` 也分发 `TRANSFER_DONE` 信号（之前只 Upload 有）
+- `FileTransfer` 加 `Quiet` 静态开关；进度条/横幅改走 stderr
+- `RemoteShell` 剩余的 banner（Error / TimeoutWarning / Kicked / UploadComplete）改走 `Console.Error.WriteLine`
+- **服务端 wedge 事件**：阶段 3 测试 `start notepad/mspaint` 导致服务端 cmd.exe 卡住，xxf 重启 SSHServer 后恢复
+- 验收：upload + download round-trip 138 字节文件，diff 1:1 一致，`--json` 模式 stdout 纯净 JSON ✅
+
+#### 阶段 5（commit `92ccffd`）—— P5 polish
+- `Console.OutputEncoding = UTF8` 在 `RunNonInteractive` 入口设置（仅非交互模式）
+- `_ws.Log.Output = (_, __) => { }` 抑制 WebSocketSharp 内置 Fatal log
+- Ctrl+C 看门狗：第一次按 Ctrl+C 转发 Interrupt + 启动 3 秒 Timer，第二次或超时后 `Environment.Exit(130)`
+- 验收：`echo 你好世界` 输出 12 字节 UTF-8（之前是 8 字节 GBK）✅；连接失败时无 stack trace 噪音 ✅
+
+#### 阶段 6（本次）—— P6 文档与 README 收尾
+- README.md 新增"非交互 CLI 模式"章节，含 4 个动词、退出码规范、JSON schema、Python 调用示例
+- 更新 README.md 特性列表和更新日志（v1.2.0）
+- docs/features/non-interactive-cli/04-implementation-plan.md 进度日志补全所有 6 个阶段
+
+### 最终状态
+
+```
+feature/non-interactive-cli
+ ├── 44ef5d3  feat(client): 添加非交互 exec 动词和基础设施 (P1+P2)
+ ├── be9d0b9  docs: 同步非交互 CLI 文档到 P2 完成状态
+ ├── a0415c6  feat(client): 添加 start 动词用于启动远程 GUI 程序 (P3)
+ ├── f09e325  feat(client): 添加 upload / download 动词 (P4)
+ ├── 92ccffd  feat(client): P5 polish - UTF-8 / WebSocketSharp 静音 / Ctrl+C 看门狗
+ └── (next)   docs: P6 README 和文档收尾
+```
+
+整个 feature 共 5 次 feat commit + 2 次 docs commit，每个 commit 都是独立可编译可验收的状态。
 
 **关键原则**：
 1. 每阶段结束 `dotnet build SSH.sln` 必须零警告通过

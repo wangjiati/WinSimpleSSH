@@ -30,4 +30,4 @@ docs/
 
 | Feature | 状态 | 目录 |
 |---------|------|------|
-| 客户端非交互 CLI 模式 | 🟢 MVP 完成（exec 动词），start/upload/download/polish 迭代中 | [features/non-interactive-cli/](./features/non-interactive-cli/) |
+| 客户端非交互 CLI 模式 | ✅ 全部完成（exec / start / upload / download + UTF-8 + JSON + Ctrl+C） | [features/non-interactive-cli/](./features/non-interactive-cli/) |
