@@ -19,7 +19,8 @@ namespace SSHClient.Core
         private readonly bool _jsonOutput;
         private readonly bool _quiet;
         private const int AuthTimeoutMs = 10000;
-        private const int CommandTimeoutMs = 600000;  // 10 分钟硬上限
+        private const int ExecTimeoutMs = 600000;  // exec 命令的硬上限 10 分钟
+        private const int StartTimeoutMs = 5000;   // start 是 fire-and-forget，5 秒没拿到 end marker 就假定已 detach
 
         public NonInteractiveRunner(string host, int port, string username, string password, bool jsonOutput, bool quiet)
         {
@@ -36,13 +37,17 @@ namespace SSHClient.Core
         /// <summary>执行一条远程命令，等待完成，返回 %ERRORLEVEL%（或连接层错误码）。</summary>
         public int RunExec(string command)
         {
-            return RunShellVerb("exec", command, wrapForDetach: false);
+            return RunShellVerb("exec", command, wrapForDetach: false, commandTimeoutMs: ExecTimeoutMs);
         }
 
-        /// <summary>启动远程 GUI 程序（封装 `start "" ...`），立即返回。P3 实现。</summary>
+        /// <summary>
+        /// 启动远程 GUI 程序（封装 `start "" ...`），fire-and-forget 语义。
+        /// 短超时（5 秒）：若超时时 begin marker 已出现（cmd.exe 已收到并执行了 start），
+        /// 假定程序已 detach 成功，返回 0。
+        /// </summary>
         public int RunStart(string program)
         {
-            return RunShellVerb("start", program, wrapForDetach: true);
+            return RunShellVerb("start", program, wrapForDetach: true, commandTimeoutMs: StartTimeoutMs);
         }
 
         /// <summary>上传文件。P4 实现。</summary>
@@ -61,7 +66,7 @@ namespace SSHClient.Core
 
         // ================== Core shell flow (exec / start shared) ==================
 
-        private int RunShellVerb(string verb, string command, bool wrapForDetach)
+        private int RunShellVerb(string verb, string command, bool wrapForDetach, int commandTimeoutMs)
         {
             if (string.IsNullOrEmpty(command))
             {
@@ -160,11 +165,30 @@ namespace SSHClient.Core
                 shell.SendInput(payload);
 
                 // 6) 等待 end marker 出现
-                if (!capture.WaitForCompletion(CommandTimeoutMs))
+                if (!capture.WaitForCompletion(commandTimeoutMs))
                 {
+                    // start 动词是 fire-and-forget 语义：只要 cmd.exe 确实收到并执行了我们的 payload
+                    // （phase 1 begin marker 已出现），就假定 start 的目标程序已 detach 成功，返回 0
+                    if (wrapForDetach && capture.IsPhase1Done)
+                    {
+                        LogInfo($"[{verb}] end marker not received within {commandTimeoutMs / 1000}s, " +
+                                "assuming detached (phase 1 confirmed cmd.exe received payload)");
+                        try { shell.SendInput("exit\n"); } catch { }
+                        Thread.Sleep(100);
+                        TryDisconnect(shell);
+
+                        result.Ok = true;
+                        result.ExitCode = 0;
+                        result.Stdout = StripEchoedCommands(capture.Stdout, realCmd, $"echo {endMarkerPrefix}%ERRORLEVEL%__");
+                        result.Stderr = capture.Stderr;
+                        result.DurationMs = sw.ElapsedMilliseconds;
+                        EmitResult(result);
+                        return ExitCodes.Success;
+                    }
+
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "marker_not_found",
-                        $"Command did not complete within {CommandTimeoutMs / 1000}s");
+                        $"Command did not complete within {commandTimeoutMs / 1000}s");
                 }
 
                 // 7) 主动 exit 释放 cmd.exe

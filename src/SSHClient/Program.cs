@@ -233,9 +233,10 @@ namespace SSHClient
                 case "exec":
                     return runner.RunExec(opts.Positional);
                 case "start":
+                    return runner.RunStart(opts.Positional);
                 case "upload":
                 case "download":
-                    Console.Error.WriteLine($"[{verb}] not implemented yet (coming in later phases)");
+                    Console.Error.WriteLine($"[{verb}] not implemented yet (coming in P4)");
                     return ExitCodes.ProtocolError;
                 default:
                     return ExitCodes.ProtocolError;

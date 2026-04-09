@@ -117,6 +117,12 @@ namespace SSHClient.Core
             return _completed.Wait(timeoutMs);
         }
 
+        /// <summary>phase 1 是否已完成（begin marker 已出现）——供调用方判断 cmd.exe 是否收到命令。</summary>
+        public bool IsPhase1Done
+        {
+            get { lock (_lock) return _phase1Done; }
+        }
+
         public string Stdout
         {
             get { lock (_lock) return _stdoutBuf.ToString(); }
