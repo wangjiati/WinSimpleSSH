@@ -6,7 +6,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SSHCommon", "src\SSHCommon\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SSHServer", "src\SSHServer\SSHServer.csproj", "{A1B2C3D4-1111-2222-3333-444455557777}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SSHC", "src\SSHClient\SSHC.csproj", "{A1B2C3D4-1111-2222-3333-444455558888}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SSHClient", "src\SSHClient\SSHClient.csproj", "{A1B2C3D4-1111-2222-3333-444455558888}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
