@@ -236,8 +236,24 @@ namespace SSHClient
                     return runner.RunStart(opts.Positional);
                 case "upload":
                 case "download":
-                    Console.Error.WriteLine($"[{verb}] not implemented yet (coming in P4)");
-                    return ExitCodes.ProtocolError;
+                    // upload/download 的 positional 是"local remote"或"remote local"，
+                    // 按第一个空格分成两半（简化处理，P4 可升级为引号感知的 SplitTransferCommand）
+                    var sp = opts.Positional.IndexOf(' ');
+                    string first, second;
+                    if (sp < 0)
+                    {
+                        first = opts.Positional;
+                        second = null;
+                    }
+                    else
+                    {
+                        first = opts.Positional.Substring(0, sp);
+                        second = opts.Positional.Substring(sp + 1).TrimStart();
+                    }
+                    if (verb == "upload")
+                        return runner.RunUpload(first, second);
+                    else
+                        return runner.RunDownload(first, second);
                 default:
                     return ExitCodes.ProtocolError;
             }

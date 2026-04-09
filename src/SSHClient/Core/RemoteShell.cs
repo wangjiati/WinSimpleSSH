@@ -145,7 +145,7 @@ namespace SSHClient.Core
 
                 case MessageType.Error:
                     var err = JsonConvert.DeserializeObject<ErrorData>(msg.Data);
-                    Console.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
+                    Console.Error.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
                     // 唤醒可能正在等待 UploadReady 的线程
                     lock (_uploadLock)
                     {
@@ -166,18 +166,18 @@ namespace SSHClient.Core
 
                 case MessageType.TimeoutWarning:
                     var tw = JsonConvert.DeserializeObject<TimeoutWarningData>(msg.Data);
-                    Console.WriteLine($"\n[Warning] 即将断开连接: {tw.SecondsRemaining}秒内无活动 / Connection timeout in {tw.SecondsRemaining}s");
+                    Console.Error.WriteLine($"\n[Warning] 即将断开连接: {tw.SecondsRemaining}秒内无活动 / Connection timeout in {tw.SecondsRemaining}s");
                     break;
 
                 case MessageType.Kicked:
                     var kick = JsonConvert.DeserializeObject<KickedData>(msg.Data);
-                    Console.WriteLine($"\n[Kicked] 您已被断开 / You were disconnected: {kick.Reason}");
+                    Console.Error.WriteLine($"\n[Kicked] 您已被断开 / You were disconnected: {kick.Reason}");
                     _onSignal?.Invoke("KICKED");
                     break;
 
                 case MessageType.UploadComplete:
                     var uploadResult = JsonConvert.DeserializeObject<FileTransferComplete>(msg.Data);
-                    Console.WriteLine(uploadResult.Success
+                    Console.Error.WriteLine(uploadResult.Success
                         ? $"\nUpload completed: {uploadResult.FileName} / 上传完成: {uploadResult.FileName}"
                         : $"\nUpload failed: {uploadResult.Message} / 上传失败: {uploadResult.Message}");
                     _onSignal?.Invoke("TRANSFER_DONE");
@@ -189,8 +189,14 @@ namespace SSHClient.Core
 
                 case MessageType.DownloadStart:
                 case MessageType.DownloadChunk:
-                case MessageType.DownloadComplete:
                     _onSignal?.Invoke($"MSG:{raw}");
+                    break;
+
+                case MessageType.DownloadComplete:
+                    // 先分发给交互模式的下载处理器（写完最后一个块、打印换行），
+                    // 再触发 TRANSFER_DONE 让非交互 Runner 知道可以退出了
+                    _onSignal?.Invoke($"MSG:{raw}");
+                    _onSignal?.Invoke("TRANSFER_DONE");
                     break;
 
                 default:

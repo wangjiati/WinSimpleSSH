@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using Newtonsoft.Json;
+using SSHCommon.Protocol;
 
 namespace SSHClient.Core
 {
@@ -19,8 +21,8 @@ namespace SSHClient.Core
         private readonly bool _jsonOutput;
         private readonly bool _quiet;
         private const int AuthTimeoutMs = 10000;
-        private const int ExecTimeoutMs = 600000;  // exec 命令的硬上限 10 分钟
-        private const int StartTimeoutMs = 5000;   // start 是 fire-and-forget，5 秒没拿到 end marker 就假定已 detach
+        private const int ExecTimeoutMs = 600000;   // exec 命令的硬上限 10 分钟
+        private const int StartTimeoutMs = 5000;    // start 是 fire-and-forget，5 秒没拿到 end marker 就假定已 detach
 
         public NonInteractiveRunner(string host, int port, string username, string password, bool jsonOutput, bool quiet)
         {
@@ -50,18 +52,178 @@ namespace SSHClient.Core
             return RunShellVerb("start", program, wrapForDetach: true, commandTimeoutMs: StartTimeoutMs);
         }
 
-        /// <summary>上传文件。P4 实现。</summary>
+        /// <summary>上传文件：connect → auth → 分块发送 → 等 TRANSFER_DONE → 断开。</summary>
         public int RunUpload(string localPath, string remotePath)
         {
-            Console.Error.WriteLine("[upload] not implemented yet (P4)");
-            return ExitCodes.ProtocolError;
+            var result = new CommandResult
+            {
+                Host = _host,
+                Username = _username,
+                Verb = "upload",
+                Command = $"{localPath} -> {remotePath ?? Path.GetFileName(localPath)}",
+                Timestamp = DateTime.Now.ToString("o"),
+            };
+            var sw = Stopwatch.StartNew();
+
+            if (!File.Exists(localPath))
+                return FinishWithError(result, sw, "protocol_error", $"Local file not found: {localPath}");
+
+            var shell = new RemoteShell();
+            if (!TryConnectAndAuth(shell, result, sw, out int connErr, out ManualResetEvent transferDone, extraSignal: null))
+                return connErr;
+
+            FileTransfer.Quiet = _quiet || _jsonOutput;
+
+            try
+            {
+                shell.Upload(localPath, remotePath);
+                if (!transferDone.WaitOne(ExecTimeoutMs))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", "Upload completion signal not received");
+                }
+            }
+            catch (Exception ex)
+            {
+                TryDisconnect(shell);
+                return FinishWithError(result, sw, "protocol_error", $"Upload failed: {ex.Message}");
+            }
+
+            TryDisconnect(shell);
+
+            result.Ok = true;
+            result.ExitCode = 0;
+            result.DurationMs = sw.ElapsedMilliseconds;
+            EmitResult(result);
+            return ExitCodes.Success;
         }
 
-        /// <summary>下载文件。P4 实现。</summary>
+        /// <summary>下载文件：connect → auth → 请求下载 → 拦截 MSG: 下载消息写入本地 → 等 TRANSFER_DONE → 断开。</summary>
         public int RunDownload(string remotePath, string localPath)
         {
-            Console.Error.WriteLine("[download] not implemented yet (P4)");
-            return ExitCodes.ProtocolError;
+            var result = new CommandResult
+            {
+                Host = _host,
+                Username = _username,
+                Verb = "download",
+                Command = $"{remotePath} -> {localPath ?? "(filename from server)"}",
+                Timestamp = DateTime.Now.ToString("o"),
+            };
+            var sw = Stopwatch.StartNew();
+
+            var shell = new RemoteShell();
+            DownloadState downloadState = null;
+
+            // 下载需要额外拦截 MSG: 前缀的消息（DownloadStart/Chunk/Complete），
+            // 转发给 FileTransfer.HandleDownloadMessage 去做文件写入
+            Action<string> downloadSignal = signal =>
+            {
+                if (!signal.StartsWith("MSG:")) return;
+                try
+                {
+                    var msg = ProtocolMessage.FromJson(signal.Substring(4));
+                    FileTransfer.HandleDownloadMessage(msg, localPath, ref downloadState);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Download parse error: {ex.Message}");
+                }
+            };
+
+            if (!TryConnectAndAuth(shell, result, sw, out int connErr, out ManualResetEvent transferDone, extraSignal: downloadSignal))
+                return connErr;
+
+            FileTransfer.Quiet = _quiet || _jsonOutput;
+
+            try
+            {
+                shell.Download(remotePath, localPath);
+                if (!transferDone.WaitOne(ExecTimeoutMs))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", "Download completion signal not received");
+                }
+            }
+            catch (Exception ex)
+            {
+                TryDisconnect(shell);
+                return FinishWithError(result, sw, "protocol_error", $"Download failed: {ex.Message}");
+            }
+
+            TryDisconnect(shell);
+
+            result.Ok = true;
+            result.ExitCode = 0;
+            result.DurationMs = sw.ElapsedMilliseconds;
+            EmitResult(result);
+            return ExitCodes.Success;
+        }
+
+        /// <summary>
+        /// 共享的连接 + 认证流程：注册 signal handler（含可选的额外 handler）、Connect、等认证结果。
+        /// </summary>
+        /// <param name="extraSignal">额外的 signal 处理（例如 download 需要拦截 MSG:）</param>
+        /// <param name="transferDone">输出：TRANSFER_DONE 的等待 event，供调用方等文件传输完成</param>
+        /// <returns>true = 连接 + 认证都成功，false = 已经通过 FinishWithError 输出错误，errorCode 含退出码</returns>
+        private bool TryConnectAndAuth(
+            RemoteShell shell,
+            CommandResult result,
+            Stopwatch sw,
+            out int errorCode,
+            out ManualResetEvent transferDone,
+            Action<string> extraSignal)
+        {
+            errorCode = 0;
+            var authResult = new ManualResetEvent(false);
+            var done = new ManualResetEvent(false);
+            transferDone = done;
+            bool authOk = false;
+
+            shell.SetSignalHandler(signal =>
+            {
+                if (signal == "AUTH_OK") { authOk = true; authResult.Set(); }
+                else if (signal == "AUTH_FAIL") { authOk = false; authResult.Set(); }
+                else if (signal == "TRANSFER_DONE") { done.Set(); }
+                extraSignal?.Invoke(signal);
+            });
+
+            // 关键：注册一个 no-op shell 输出拦截器，丢弃 cmd.exe 欢迎横幅和 prompt。
+            // upload/download 不需要 shell 输出，这样能防止它们污染 stdout。
+            shell.SetShellOutputHandler((_, __) => { });
+
+            LogInfo($"Connecting to {_host}:{_port}...");
+
+            try
+            {
+                shell.Connect(_host, _port, _username, _password);
+            }
+            catch (Exception ex)
+            {
+                errorCode = FinishWithError(result, sw, "connection_refused", ex.Message);
+                return false;
+            }
+
+            if (!shell.IsConnected)
+            {
+                errorCode = FinishWithError(result, sw, "connection_refused", $"Failed to reach {_host}:{_port}");
+                return false;
+            }
+
+            if (!authResult.WaitOne(AuthTimeoutMs))
+            {
+                TryDisconnect(shell);
+                errorCode = FinishWithError(result, sw, "connection_timeout", "Handshake timed out");
+                return false;
+            }
+
+            if (!authOk)
+            {
+                TryDisconnect(shell);
+                errorCode = FinishWithError(result, sw, "auth_failed", "Invalid username or password");
+                return false;
+            }
+
+            return true;
         }
 
         // ================== Core shell flow (exec / start shared) ==================
