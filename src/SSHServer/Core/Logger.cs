@@ -22,7 +22,7 @@ namespace SSHServer.Core
 
         public static void Init(string logDir = null)
         {
-            _logDir = logDir ?? AppDomain.CurrentDomain.BaseDirectory;
+            _logDir = logDir ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "log");
             _logFile = Path.Combine(_logDir, $"server_{DateTime.Now:yyyyMMdd}.log");
 
             // 确保目录存在
