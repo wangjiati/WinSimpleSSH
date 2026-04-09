@@ -221,6 +221,10 @@ namespace SSHClient
         /// </summary>
         static int RunNonInteractive(string verb, string[] args)
         {
+            // 非交互模式统一使用 UTF-8 输出，让 Agent 按 UTF-8 解析 stdout 不会乱码。
+            // 交互模式不受影响（保留用户 cmd.exe 的默认编码，避免破坏终端中文显示）。
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+
             var opts = ParseCommonArgs(verb, args);
             if (opts == null) return ExitCodes.ProtocolError;
 

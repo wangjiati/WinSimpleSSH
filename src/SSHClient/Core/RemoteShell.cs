@@ -30,6 +30,11 @@ namespace SSHClient.Core
             var url = $"ws://{host}:{port}/";
             _ws = new WebSocket(url);
 
+            // 抑制 WebSocketSharp 的内置 Fatal/Error 日志——它默认会往 stderr 打完整 stack trace，
+            // 对 Agent 消费者非常吵。我们的上层错误处理（catch + OnError 回调 + 连接失败检测）
+            // 已经足够产生语义化错误，不需要底层栈
+            _ws.Log.Output = (logData, filePath) => { };
+
             _ws.OnMessage += (sender, e) =>
             {
                 if (e.Data != null)

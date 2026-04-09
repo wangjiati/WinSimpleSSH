@@ -294,12 +294,26 @@ namespace SSHClient.Core
                 return FinishWithError(result, sw, "auth_failed", "Invalid username or password");
             }
 
-            // 4) Ctrl+C 转发（P5 完善，这里先埋一个最小实现）
+            // 4) Ctrl+C 转发 + 硬超时兜底
+            // 第一次 Ctrl+C：转发 Interrupt 给远端清理；启动 3 秒看门狗
+            // 若 3 秒内主线程没自然退出（例如卡在等 marker），看门狗强制 Environment.Exit(130)
+            System.Threading.Timer watchdog = null;
             ConsoleCancelEventHandler cancelHandler = (s, e) =>
             {
                 e.Cancel = true;
-                LogInfo("\n^C — forwarding interrupt to remote");
+                LogInfo("\n^C — forwarding interrupt to remote (press again to force quit)");
                 try { shell.SendInterrupt(); } catch { }
+                if (watchdog == null)
+                {
+                    watchdog = new System.Threading.Timer(
+                        _ => Environment.Exit(ExitCodes.Interrupted),
+                        null, 3000, System.Threading.Timeout.Infinite);
+                }
+                else
+                {
+                    // 第二次 Ctrl+C：立即强退
+                    Environment.Exit(ExitCodes.Interrupted);
+                }
             };
             Console.CancelKeyPress += cancelHandler;
 
@@ -361,6 +375,7 @@ namespace SSHClient.Core
             finally
             {
                 Console.CancelKeyPress -= cancelHandler;
+                watchdog?.Dispose();
             }
 
             // 8) 输出结果
