@@ -23,17 +23,30 @@ namespace SSHServer.Core
         public Action<string> SendJson { get; set; }
         public Action CloseConnection { get; set; }
 
+        // 连接是否已关闭
+        private volatile bool _closed;
+
         public void Send(ProtocolMessage msg)
         {
+            if (_closed) return;
             try
             {
                 SendJson?.Invoke(msg.ToJson());
             }
-            catch { }
+            catch
+            {
+                _closed = true;
+            }
+        }
+
+        public void MarkClosed()
+        {
+            _closed = true;
         }
 
         public void Cleanup()
         {
+            MarkClosed();
             Shell?.Dispose();
             Shell = null;
             FileTransfer = null;

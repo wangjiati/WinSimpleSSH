@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net452</TargetFramework>
     <OutputType>Exe</OutputType>
-    <AssemblyName>SSHClient</AssemblyName>
+    <AssemblyName>SSHC</AssemblyName>
     <RootNamespace>SSHClient</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
