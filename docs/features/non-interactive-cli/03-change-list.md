@@ -3,6 +3,15 @@
 > **目的**：把 D1-D9 的决策落成**精确到文件+函数的改动清单**，用来驱动实现。
 > **前置**：已锁定 [02-design-decisions.md](./02-design-decisions.md) 的全部 9 个决策点（"全按推荐来"，2026-04-09）
 > **服务端**：零改动。所有修改都在 `src/SSHClient/` 和（必要时）`src/SSHCommon/` 下。
+>
+> **⚠️ 行号已过时**：本文档的 `file.cs:123` 引用基于 commit `804abe7` 时的代码。实际实施时代码已前进到 `355d14d`，
+> 部分行号不再准确，但改动**大方向和函数签名**仍然有效。实际落地版本见 commit `44ef5d3`，
+> 以及 `src/SSHClient/Core/` 下的实际代码。下次迭代请优先读代码，不要依赖本文的行号。
+>
+> **实施偏差记录**：
+> - 计划用 `@echo off` 关闭 cmd.exe 命令回显 → 实测 cmd.exe 在 stdin 被管道化时**不认** `@echo off`
+> - 实际解决方案：**两阶段标记（begin + end marker）+ 客户端按行剥离回显**（见 `NonInteractiveRunner.StripEchoedCommands`）
+> - 正则加了 `(?m)^` 行首锚点，避免匹配到回显行里的标记字面量
 
 ## 总览
 

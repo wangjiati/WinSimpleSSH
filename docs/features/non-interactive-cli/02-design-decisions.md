@@ -1,24 +1,33 @@
 # 02 — 设计决策点
 
 > **目的**：把非交互 CLI 改造过程中**需要用户拍板**的问题集中列出来。每个决策都有可选方案和取舍分析。
-> **状态**：🟡 等待决策
+> **状态**：✅ 全部决策已锁定
 > **决策人**：xxf
-> **决策日期**：待定
+> **决策日期**：2026-04-09（口头确认"全按这个来"）
 > **⚠️ 阅读前先看**：[00-context.md](./00-context.md) —— 业务背景锁定了 Agent 作为主要调用方，D1-D6 的推荐倾向基于这个前提
 
-## 决策总览
+## 决策总览（已锁定）
 
-| # | 决策点 | 状态 | 基于 Agent 场景的推荐 |
-|---|--------|------|----------------------|
-| D1 | 密码如何传递 | ⏳ 待定 | **只做 `-P`**（Agent 不在乎 shell history） |
-| D2 | 命令执行模式 | ⏳ 待定 | **只做 `-e`**，新增独立动词 `upload/download/start` |
-| D3 | 命令完成检测机制 | ⏳ 待定 | **方案 A + B 混合**（标记拿 exit code，然后 `exit` 断连） |
-| D4 | 输出格式 | ⏳ 待定 | **stderr 横幅 + `-q` + `--json`** |
-| D5 | 退出码语义 | ⏳ 待定 | **仿 OpenSSH**（255=连接层，254=认证，其他=命令透传） |
-| D6 | Ctrl+C 行为 | ⏳ 待定 | **方案 A**（转发中断） |
-| D7 | CLI 命令形态：动词式 vs 子命令式 | ⏳ 待定 | **动词式**（`SSHC exec`, `SSHC upload`, `SSHC start`） |
-| D8 | 设备别名管理 | ⏳ 待定 | **不管**（Agent 自己维护，SSHC 只认 IP） |
-| D9 | JSON 输出 schema | ⏳ 待定 | 见 D9 节 |
+| # | 决策点 | 状态 | 最终答案 |
+|---|--------|------|---------|
+| D1 | 密码如何传递 | ✅ | **`-P <pwd>`**（明文参数，Agent 不在乎 shell history） |
+| D2 | 命令执行模式 | ✅ | **每个动作独立动词**（exec/start/upload/download），无 `-e`/脚本文件 |
+| D3 | 命令完成检测机制 | ✅ | **两阶段标记 + `exit`**（begin/end marker + 断连释放 cmd.exe） |
+| D4 | 输出格式 | ✅ | **stderr 横幅 + `-q` + `--json`** |
+| D5 | 退出码语义 | ✅ | **仿 OpenSSH**：0 成功 / 130 中断 / 253 协议 / 254 认证 / 255 连接 / 其他透传 %ERRORLEVEL% |
+| D6 | Ctrl+C 行为 | ✅ | 转发 Interrupt 给服务端（最小实现，P5 再加超时强退保护） |
+| D7 | CLI 命令形态 | ✅ | **动词式**：`SSHC exec / start / upload / download`，保留 `connect` 交互 REPL |
+| D8 | 设备别名管理 | ✅ | **不做**（Agent 自己维护，SSHC 只认 IP） |
+| D9 | JSON 输出 schema | ✅ | `ok / host / username / verb / command / exit_code / stdout / stderr / duration_ms / error / timestamp` |
+
+## 实施落地情况（commit `44ef5d3`）
+
+- D1 / D2 / D4 / D5 / D7 / D8 / D9 — **已完全实现**（`exec` 动词可用，`start`/`upload`/`download` 是 stub，P3/P4 补完）
+- D3 — **已实现**但实施中发现原计划的 `@echo off` 对 cmd.exe 管道模式无效，
+  实际方案改为"两阶段标记 + 客户端按行剥离回显"（见 `NonInteractiveRunner.StripEchoedCommands`）
+- D6 — **最小实现**（CancelKeyPress handler 已注册转发 Interrupt）
+
+详情见 [04-implementation-plan.md 的进度日志](./04-implementation-plan.md#进度日志)。
 
 ---
 

@@ -6,15 +6,33 @@
 
 ## 阶段总览
 
-| 阶段 | 目标 | 新增/改动 | 可验证产出 |
-|------|------|-----------|----------|
-| **P0** | 安全网：回归基线 | 无改动 | 交互模式手动测一遍，记录基线行为 |
-| **P1** | 基础设施 | ExitCodes, CommandResult, OutputCapture, RemoteShell 拦截接口, Main 返回 int | 编译通过，REPL 无回归 |
-| **P2** | `exec` 动词 | NonInteractiveRunner.RunExec, Program 分派, ParseCommonArgs | `SSHC exec` 能执行远程命令并返回正确 exit code |
-| **P3** | `start` 动词 | RunStart（仅加 `wrapForDetach`） | `SSHC start` 能启动远程 GUI |
-| **P4** | `upload` / `download` 动词 | RunUpload, RunDownload, FileTransfer 静默开关 | 文件传输非交互化 |
-| **P5** | `--json` + Ctrl+C + Banner 路由 | Runner 的 JSON 输出路径, Console.CancelKeyPress, stderr 化 | Agent 友好全功能 |
-| **P6** | 验收回归 | 修 bug、微调、文档 | 所有 [03 验收要点](./03-change-list.md#-验收要点) 通过 |
+| 阶段 | 目标 | 状态 |
+|------|------|------|
+| **P0** | 安全网：交互模式基线回归测试 | ✅ 已验证（2026-04-09） |
+| **P1** | 基础设施：ExitCodes / CommandResult / OutputCapture / RemoteShell 拦截接口 / Main 返回 int | ✅ commit `44ef5d3` |
+| **P2** | `exec` 动词 MVP：NonInteractiveRunner.RunExec + Program verb 分派 + ParseCommonArgs | ✅ commit `44ef5d3` |
+| **P3** | `start` 动词：RunStart 复用 `wrapForDetach` 分支 | 🟡 待开始 |
+| **P4** | `upload` / `download` 动词：复用 FileTransfer，加 Quiet 开关 | 🟡 待开始 |
+| **P5** | `--json` polish + Ctrl+C 超时强退 + UTF-8 输出 + WebSocketSharp Fatal 日志抑制 + Banner stderr 完善 | 🟡 部分完成（banner 路由、JSON 基础路径、Ctrl+C 最小实现都在 `44ef5d3` 里） |
+| **P6** | 验收回归 + README/CLAUDE.md 更新 | 🟡 待开始 |
+
+## 进度日志
+
+### 2026-04-09 —— P0 / P1 / P2 全部落地
+
+- **P0 基线验证**：xxf 在生产环境跑完交互模式测试（login / dir 中文 / ping / clients / kick / exit），全部符合既有行为
+- **P1 + P2 实施**：在 feature 分支 `feature/non-interactive-cli` 合成一次 commit `44ef5d3`（12 files, +2507 / -30）
+- **实施偏差**：原计划用 `@echo off` 关 cmd.exe 回显，实测无效。改用"两阶段标记 + 客户端按行剥离"
+- **验收测试结果**：
+  - Test 1 `exec "echo hello-from-sshc"`：stdout 干净，exit 0 ✅
+  - Test 2 `exec "echo 你好世界"`：GBK 字节正确（终端显示问题属于 P5 UTF-8 任务）✅
+  - Test 3 `cmd /c exit 42`：exit 42 透传 ✅
+  - Test 4 错密码：exit 254 ✅
+  - Test 5 错 IP：exit 255 ✅
+  - Test 6 `ping -n 3`：2.77s，完整输出 ✅
+  - Test 7 `--json`：schema 完整，`stdout` 字段干净 ✅
+  - Test 8 unknown verb / 缺参数：exit 253 ✅
+  - Test 9 交互模式回归：完全无回归 ✅
 
 **关键原则**：
 1. 每阶段结束 `dotnet build SSH.sln` 必须零警告通过
