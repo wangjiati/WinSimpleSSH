@@ -126,7 +126,7 @@ namespace SSHServer.Core
                         session.Send(new ProtocolMessage(MessageType.TimeoutWarning,
                             JsonConvert.SerializeObject(new TimeoutWarningData { SecondsRemaining = 10 })));
 
-                        Console.WriteLine($"[Timeout] 警告已发送: {session.Username} ({session.ConnectionId})");
+                        SLog.Warn($"[Timeout] 警告已发送: {session.Username} ({session.ConnectionId})");
                     }
 
                     // 警告后10秒仍无活动，断开连接
@@ -147,7 +147,7 @@ namespace SSHServer.Core
 
             foreach (var s in toClose)
             {
-                Console.WriteLine($"[Timeout] 断开超时客户端: {s.Username} ({s.ConnectionId})");
+                SLog.Warn($"[Timeout] 断开超时客户端: {s.Username} ({s.ConnectionId})");
                 s.CloseConnection?.Invoke();
             }
         }
@@ -171,7 +171,7 @@ namespace SSHServer.Core
                 _sessions[ID] = _session;
             }
 
-            Console.WriteLine($"[Connect] {ID} from {_session.RemoteEndpoint}");
+            SLog.Info($"[Connect] {ID} from {_session.RemoteEndpoint}");
         }
 
         protected override void OnMessage(MessageEventArgs e)
@@ -186,7 +186,9 @@ namespace SSHServer.Core
 
         protected override void OnClose(CloseEventArgs e)
         {
-            Console.WriteLine($"[Disconnect] {ID} ({_session?.Username ?? "unknown"}): Code={e.Code} Reason={e.Reason}");
+            // 客户端异常断开(Code=1006)是预期行为，仅记录警告
+            var level = e.Code == 1006 ? LogLevel.Warn : LogLevel.Info;
+            SLog.Write(level, $"[Disconnect] {ID} ({_session?.Username ?? "unknown"}): Code={e.Code} Reason={e.Reason}");
 
             lock (_lock)
             {
@@ -209,6 +211,7 @@ namespace SSHServer.Core
             }
             catch
             {
+                SLog.Warn($"[Message] Invalid message format from {_session?.Username ?? "unknown"}");
                 SendError("Invalid message format");
                 return;
             }
@@ -280,7 +283,7 @@ namespace SSHServer.Core
                         JsonConvert.SerializeObject(new AuthResponse { Success = true, Message = "Authenticated" })));
                     StartShell();
 
-                    Console.WriteLine($"[Auth] {ID} authenticated as {req.Username}");
+                    SLog.Info($"[Auth] {ID} authenticated as {req.Username}");
                     return;
                 }
             }
@@ -321,6 +324,7 @@ namespace SSHServer.Core
             }
             catch (Exception ex)
             {
+                SLog.Error($"Upload start failed", ex);
                 SendError($"Upload start failed: {ex.Message}");
             }
         }
@@ -333,6 +337,7 @@ namespace SSHServer.Core
             }
             catch (Exception ex)
             {
+                SLog.Error($"Upload chunk failed", ex);
                 SendError($"Upload chunk failed: {ex.Message}");
             }
         }
@@ -377,6 +382,7 @@ namespace SSHServer.Core
             }
             catch (Exception ex)
             {
+                SLog.Error($"Download failed", ex);
                 SendError($"Download failed: {ex.Message}");
             }
         }

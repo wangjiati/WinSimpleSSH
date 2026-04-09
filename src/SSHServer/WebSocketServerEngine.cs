@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using SSHServer.Config;
 using SSHServer.Core;
+using WsLogLevel = WebSocketSharp.LogLevel;
 using WebSocketSharp.Server;
 
 namespace SSHServer
@@ -15,23 +16,34 @@ namespace SSHServer
             var configPath = FindConfigFile();
             var config = ServerConfig.Load(configPath);
 
+            // 初始化日志系统
+            SLog.Init();
+
             ConnectionManager.SetConfig(config);
 
             _server = new WebSocketServer(config.Port);
             _server.AddWebSocketService<ConnectionManager>("/");
             _server.KeepClean = true;
+
+            // 抑制 WebSocketSharp 内部日志（客户端异常断开时的预期错误降级为警告）
+            _server.Log.Level = WsLogLevel.Fatal;
+            _server.Log.Output = (data, msg) =>
+            {
+                SLog.Warn($"[WS] {msg}");
+            };
+
             _server.Start();
 
             ConnectionManager.StartTimeoutTimer();
 
-            Console.WriteLine($"SSH Server started on port {config.Port}");
+            SLog.Info($"SSH Server started on port {config.Port}");
         }
 
         public void Stop()
         {
             ConnectionManager.StopTimeoutTimer();
             _server?.Stop();
-            Console.WriteLine("SSH Server stopped.");
+            SLog.Info("SSH Server stopped.");
         }
 
         public void ListClients()
