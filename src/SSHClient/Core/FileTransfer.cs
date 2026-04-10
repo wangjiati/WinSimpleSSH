@@ -10,12 +10,19 @@ namespace SSHClient.Core
     {
         private const int ChunkSize = 65536; // 64KB
 
+        /// <summary>
+        /// 静默模式：非交互 CLI 的 upload/download 动词会把它打开，
+        /// 抑制进度条和辅助文字，或者改走 stderr。
+        /// 注意：这是进程级静态状态，Agent 并行调用是多进程，彼此不冲突。
+        /// </summary>
+        public static bool Quiet { get; set; }
+
         /// <summary>发送上传开始消息，返回是否成功读取本地文件</summary>
         public static bool SendUploadStart(object sendLock, WebSocket ws, string localPath, string remotePath)
         {
             if (!File.Exists(localPath))
             {
-                Console.WriteLine($"File not found: {localPath}");
+                Console.Error.WriteLine($"File not found: {localPath}");
                 return false;
             }
 
@@ -76,7 +83,7 @@ namespace SSHClient.Core
             var completeMsg = new ProtocolMessage(MessageType.UploadComplete, "");
             SendLocked(sendLock, ws, completeMsg.ToJson());
 
-            Console.WriteLine();
+            if (!Quiet) Console.Error.WriteLine();
             _pendingUploadData = null;
             _pendingUploadInfo = null;
         }
@@ -127,19 +134,20 @@ namespace SSHClient.Core
                     break;
 
                 case MessageType.DownloadComplete:
-                    Console.WriteLine();
+                    if (!Quiet) Console.Error.WriteLine();
                     break;
             }
         }
 
         private static void DrawProgressBar(double progress, long totalSize, long transferred)
         {
+            if (Quiet) return;
             var barWidth = 40;
             var filled = (int)(barWidth * progress);
             var bar = new string('█', filled) + new string('░', barWidth - filled);
 
             var sizeStr = FormatFileSize(transferred) + "/" + FormatFileSize(totalSize);
-            Console.Write($"\r  [{bar}] {progress * 100:F1}% {sizeStr}   ");
+            Console.Error.Write($"\r  [{bar}] {progress * 100:F1}% {sizeStr}   ");
         }
 
         private static string FormatFileSize(long bytes)

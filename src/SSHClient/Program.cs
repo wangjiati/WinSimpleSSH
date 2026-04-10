@@ -9,25 +9,41 @@ namespace SSHClient
 {
     class Program
     {
-        static void Main(string[] args)
+        static int Main(string[] args)
         {
             if (args.Length == 0)
             {
                 PrintUsage();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
-                return;
+                return ExitCodes.Success;
             }
 
-            var cmd = args[0].ToLower();
-            if (cmd != "connect")
+            var verb = args[0].ToLower();
+            switch (verb)
             {
-                PrintUsage();
-                Console.WriteLine("\nPress any key to exit...");
-                Console.ReadKey();
-                return;
+                case "connect":
+                    return RunConnect(args);
+                case "exec":
+                case "start":
+                case "upload":
+                case "download":
+                    return RunNonInteractive(verb, args);
+                case "help":
+                case "-h":
+                case "--help":
+                    PrintUsage();
+                    return ExitCodes.Success;
+                default:
+                    Console.Error.WriteLine($"Unknown verb: {verb}");
+                    PrintUsage();
+                    return ExitCodes.ProtocolError;
             }
+        }
 
+        /// <summary>
+        /// 交互式 REPL（原 Main 主体）。保持与非交互动词的行为隔离。
+        /// </summary>
+        static int RunConnect(string[] args)
+        {
             // Parse: connect <host> -p <port> -u <username>
             string host = null;
             int port = 22222;
@@ -60,8 +76,8 @@ namespace SSHClient
 
             if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(username))
             {
-                Console.WriteLine("Usage: ssh-cli connect <host> -p <port> -u <username>");
-                return;
+                Console.WriteLine("Usage: SSHC connect <host> -p <port> -u <username>");
+                return ExitCodes.ProtocolError;
             }
 
             Console.Write("Password: ");
@@ -73,7 +89,7 @@ namespace SSHClient
             var downloadState = new SSHClient.Core.DownloadState[1];
             var downloadLocalPath = new string[1];
 
-            shell.SetOutputHandler(signal =>
+            shell.SetSignalHandler(signal =>
             {
                 if (signal.StartsWith("MSG:"))
                 {
@@ -118,7 +134,7 @@ namespace SSHClient
             {
                 Console.WriteLine("认证失败，程序退出 / Authentication failed");
                 shell.Disconnect();
-                return;
+                return ExitCodes.AuthFailed;
             }
 
             shell.StartHeartbeat();
@@ -197,6 +213,130 @@ namespace SSHClient
             }
 
             shell.Disconnect();
+            return ExitCodes.Success;
+        }
+
+        /// <summary>
+        /// 非交互模式入口——Agent 友好的一次性命令执行。
+        /// </summary>
+        static int RunNonInteractive(string verb, string[] args)
+        {
+            // 非交互模式统一使用 UTF-8 输出，让 Agent 按 UTF-8 解析 stdout 不会乱码。
+            // 交互模式不受影响（保留用户 cmd.exe 的默认编码，避免破坏终端中文显示）。
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+
+            var opts = ParseCommonArgs(verb, args);
+            if (opts == null) return ExitCodes.ProtocolError;
+
+            var runner = new NonInteractiveRunner(
+                opts.Host, opts.Port, opts.Username, opts.Password,
+                opts.JsonOutput, opts.Quiet);
+
+            switch (verb)
+            {
+                case "exec":
+                    return runner.RunExec(opts.Positional);
+                case "start":
+                    return runner.RunStart(opts.Positional);
+                case "upload":
+                case "download":
+                    // upload/download 的 positional 是"local remote"或"remote local"，
+                    // 按第一个空格分成两半（简化处理，P4 可升级为引号感知的 SplitTransferCommand）
+                    var sp = opts.Positional.IndexOf(' ');
+                    string first, second;
+                    if (sp < 0)
+                    {
+                        first = opts.Positional;
+                        second = null;
+                    }
+                    else
+                    {
+                        first = opts.Positional.Substring(0, sp);
+                        second = opts.Positional.Substring(sp + 1).TrimStart();
+                    }
+                    if (verb == "upload")
+                        return runner.RunUpload(first, second);
+                    else
+                        return runner.RunDownload(first, second);
+                default:
+                    return ExitCodes.ProtocolError;
+            }
+        }
+
+        class CommonOpts
+        {
+            public string Host;
+            public int Port = 22222;
+            public string Username;
+            public string Password;
+            public bool JsonOutput;
+            public bool Quiet;
+            public string Positional;
+        }
+
+        /// <summary>
+        /// 解析非交互动词共用的参数：`&lt;verb&gt; &lt;host&gt; -u &lt;user&gt; -P &lt;pwd&gt; [-p &lt;port&gt;] [-q] [--json] [--] &lt;positional...&gt;`
+        /// 返回 null 表示解析失败（错误已输出到 stderr）。
+        /// </summary>
+        static CommonOpts ParseCommonArgs(string verb, string[] args)
+        {
+            if (args.Length < 2)
+            {
+                Console.Error.WriteLine($"Usage: SSHC {verb} <host> -u <username> -P <password> [options] <args...>");
+                return null;
+            }
+            var opts = new CommonOpts { Host = args[1] };
+            var positional = new System.Text.StringBuilder();
+
+            int idx = 2;
+            while (idx < args.Length)
+            {
+                switch (args[idx])
+                {
+                    case "-p":
+                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-p requires a value"); return null; }
+                        if (!int.TryParse(args[idx + 1], out opts.Port)) { Console.Error.WriteLine("-p value must be an integer"); return null; }
+                        idx += 2;
+                        break;
+                    case "-u":
+                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-u requires a value"); return null; }
+                        opts.Username = args[idx + 1];
+                        idx += 2;
+                        break;
+                    case "-P":
+                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-P requires a value"); return null; }
+                        opts.Password = args[idx + 1];
+                        idx += 2;
+                        break;
+                    case "-q":
+                    case "--quiet":
+                        opts.Quiet = true;
+                        idx++;
+                        break;
+                    case "--json":
+                        opts.JsonOutput = true;
+                        idx++;
+                        break;
+                    default:
+                        if (positional.Length > 0) positional.Append(' ');
+                        positional.Append(args[idx]);
+                        idx++;
+                        break;
+                }
+            }
+            opts.Positional = positional.ToString();
+
+            if (string.IsNullOrEmpty(opts.Host))
+            {
+                Console.Error.WriteLine("Missing <host>");
+                return null;
+            }
+            if (string.IsNullOrEmpty(opts.Username) || string.IsNullOrEmpty(opts.Password))
+            {
+                Console.Error.WriteLine("Missing -u <username> or -P <password>");
+                return null;
+            }
+            return opts;
         }
 
         static void PrintClientList(ClientListData list)

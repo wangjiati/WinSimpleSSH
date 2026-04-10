@@ -10,7 +10,8 @@ namespace SSHClient.Core
     {
         private WebSocket _ws;
         private Timer _heartbeatTimer;
-        private Action<string> _onOutput;
+        private Action<string> _onSignal;
+        private Action<string, bool> _onShellOutput;  // (text, isStderr) — 非交互模式拦截 Shell 输出
         private readonly object _sendLock = new object();
         private readonly object _uploadLock = new object();
         private bool _uploadReady;
@@ -29,6 +30,11 @@ namespace SSHClient.Core
             var url = $"ws://{host}:{port}/";
             _ws = new WebSocket(url);
 
+            // 抑制 WebSocketSharp 的内置 Fatal/Error 日志——它默认会往 stderr 打完整 stack trace，
+            // 对 Agent 消费者非常吵。我们的上层错误处理（catch + OnError 回调 + 连接失败检测）
+            // 已经足够产生语义化错误，不需要底层栈
+            _ws.Log.Output = (logData, filePath) => { };
+
             _ws.OnMessage += (sender, e) =>
             {
                 if (e.Data != null)
@@ -40,12 +46,12 @@ namespace SSHClient.Core
             _ws.OnClose += (sender, e) =>
             {
                 StopHeartbeat();
-                Console.WriteLine("\nDisconnected from server. / 已与服务端断开连接");
+                Console.Error.WriteLine("\nDisconnected from server. / 已与服务端断开连接");
             };
 
             _ws.OnError += (sender, e) =>
             {
-                Console.WriteLine($"\nConnection error: {e.Message} / 连接错误: {e.Message}");
+                Console.Error.WriteLine($"\nConnection error: {e.Message} / 连接错误: {e.Message}");
             };
 
             _ws.Connect();
@@ -62,13 +68,25 @@ namespace SSHClient.Core
             }
             else
             {
-                Console.WriteLine("Failed to connect. / 连接失败");
+                Console.Error.WriteLine("Failed to connect. / 连接失败");
             }
         }
 
-        public void SetOutputHandler(Action<string> handler)
+        /// <summary>
+        /// 注册"信号"回调——用于认证结果、客户端列表、下载消息转发等非文本流事件。
+        /// </summary>
+        public void SetSignalHandler(Action<string> handler)
         {
-            _onOutput = handler;
+            _onSignal = handler;
+        }
+
+        /// <summary>
+        /// 注册 Shell 输出拦截器。若已注册，ShellOutput/ShellError 不再写入 Console，
+        /// 而是通过此回调交给调用方处理（非交互模式用）。
+        /// </summary>
+        public void SetShellOutputHandler(Action<string, bool> handler)
+        {
+            _onShellOutput = handler;
         }
 
         /// <summary>启动心跳，每30秒发送 Ping</summary>
@@ -104,29 +122,35 @@ namespace SSHClient.Core
                     var authResp = JsonConvert.DeserializeObject<AuthResponse>(msg.Data);
                     if (authResp.Success)
                     {
-                        Console.WriteLine("Authenticated successfully. / 认证成功");
-                        _onOutput?.Invoke("AUTH_OK");
+                        Console.Error.WriteLine("Authenticated successfully. / 认证成功");
+                        _onSignal?.Invoke("AUTH_OK");
                     }
                     else
                     {
-                        Console.WriteLine($"Authentication failed: {authResp.Message} / 认证失败: {authResp.Message}");
-                        _onOutput?.Invoke("AUTH_FAIL");
+                        Console.Error.WriteLine($"Authentication failed: {authResp.Message} / 认证失败: {authResp.Message}");
+                        _onSignal?.Invoke("AUTH_FAIL");
                     }
                     break;
 
                 case MessageType.ShellOutput:
                     var output = JsonConvert.DeserializeObject<ShellOutputData>(msg.Data);
-                    Console.Write(output.Text);
+                    if (_onShellOutput != null)
+                        _onShellOutput(output.Text, false);
+                    else
+                        Console.Write(output.Text);
                     break;
 
                 case MessageType.ShellError:
                     var errOutput = JsonConvert.DeserializeObject<ShellOutputData>(msg.Data);
-                    Console.Write(errOutput.Text);
+                    if (_onShellOutput != null)
+                        _onShellOutput(errOutput.Text, true);
+                    else
+                        Console.Write(errOutput.Text);
                     break;
 
                 case MessageType.Error:
                     var err = JsonConvert.DeserializeObject<ErrorData>(msg.Data);
-                    Console.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
+                    Console.Error.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
                     // 唤醒可能正在等待 UploadReady 的线程
                     lock (_uploadLock)
                     {
@@ -147,31 +171,37 @@ namespace SSHClient.Core
 
                 case MessageType.TimeoutWarning:
                     var tw = JsonConvert.DeserializeObject<TimeoutWarningData>(msg.Data);
-                    Console.WriteLine($"\n[Warning] 即将断开连接: {tw.SecondsRemaining}秒内无活动 / Connection timeout in {tw.SecondsRemaining}s");
+                    Console.Error.WriteLine($"\n[Warning] 即将断开连接: {tw.SecondsRemaining}秒内无活动 / Connection timeout in {tw.SecondsRemaining}s");
                     break;
 
                 case MessageType.Kicked:
                     var kick = JsonConvert.DeserializeObject<KickedData>(msg.Data);
-                    Console.WriteLine($"\n[Kicked] 您已被断开 / You were disconnected: {kick.Reason}");
-                    _onOutput?.Invoke("KICKED");
+                    Console.Error.WriteLine($"\n[Kicked] 您已被断开 / You were disconnected: {kick.Reason}");
+                    _onSignal?.Invoke("KICKED");
                     break;
 
                 case MessageType.UploadComplete:
                     var uploadResult = JsonConvert.DeserializeObject<FileTransferComplete>(msg.Data);
-                    Console.WriteLine(uploadResult.Success
+                    Console.Error.WriteLine(uploadResult.Success
                         ? $"\nUpload completed: {uploadResult.FileName} / 上传完成: {uploadResult.FileName}"
                         : $"\nUpload failed: {uploadResult.Message} / 上传失败: {uploadResult.Message}");
-                    _onOutput?.Invoke("TRANSFER_DONE");
+                    _onSignal?.Invoke("TRANSFER_DONE");
                     break;
 
                 case MessageType.ClientList:
-                    _onOutput?.Invoke($"CLIENTLIST:{msg.Data}");
+                    _onSignal?.Invoke($"CLIENTLIST:{msg.Data}");
                     break;
 
                 case MessageType.DownloadStart:
                 case MessageType.DownloadChunk:
+                    _onSignal?.Invoke($"MSG:{raw}");
+                    break;
+
                 case MessageType.DownloadComplete:
-                    _onOutput?.Invoke($"MSG:{raw}");
+                    // 先分发给交互模式的下载处理器（写完最后一个块、打印换行），
+                    // 再触发 TRANSFER_DONE 让非交互 Runner 知道可以退出了
+                    _onSignal?.Invoke($"MSG:{raw}");
+                    _onSignal?.Invoke("TRANSFER_DONE");
                     break;
 
                 default:

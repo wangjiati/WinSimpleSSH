@@ -34,6 +34,7 @@
 
 - **单文件部署** — Costura.Fody 嵌入依赖，编译为独立 exe，无需附带 DLL
 - **交互式 Shell** — 远程执行 cmd.exe 命令，实时输出，体验类似真实 SSH
+- **非交互 CLI** — `exec` / `start` / `upload` / `download` 4 个动词，Agent 友好，支持 `--json` 输出和精确退出码
 - **文件传输** — 支持上传和下载，64KB 分块传输，带进度条显示，权限预检
 - **多客户端** — 支持多个客户端同时连接，同一用户名可多次登录
 - **超时保护** — 10分钟无活动自动断开（先警告，10秒后执行）
@@ -41,7 +42,7 @@
 - **管理能力** — 服务端/客户端均可列出连接、踢出指定客户端
 - **日志系统** — 服务端自动记录操作日志到 exe 同级 log 目录
 - **快捷操作** — 支持 Ctrl+C 中断命令、上下箭头翻历史命令
-- **中英双���** — 所有帮助和提示信息均支持中英双语显示
+- **中英双语** — 所有帮助和提示信息均支持中英双语显示
 - **广泛兼容** — 支持 Windows 7 / 10 / 11，基于 .NET Framework 4.5.2
 
 ## 环境要求
@@ -181,6 +182,116 @@ SSHC.exe connect 192.168.1.100 -p 30000 -u admin
 ```
 
 连接后会提示输入密码（输入时显示为 `***`），认证成功后进入交互式 Shell。密码错误时程序自动退出。
+
+### 非交互 CLI 模式（Agent / 脚本调用）
+
+除了 `connect` 进入交互式 Shell，SSHC 还支持 4 个**非交互动词**，用于脚本和 AI Agent 一次性调用：
+
+```bash
+SSHC.exe exec     <主机> -u <用户> -P <密码> [选项] "<命令>"
+SSHC.exe start    <主机> -u <用户> -P <密码> [选项] "<程序> [参数]"
+SSHC.exe upload   <主机> -u <用户> -P <密码> [选项] <本地文件> <远程路径>
+SSHC.exe download <主机> -u <用户> -P <密码> [选项] <远程文件> <本地路径>
+```
+
+**通用选项：**
+
+| 选项 | 说明 |
+|------|------|
+| `-p <端口>` | 服务端端口，默认 `22222` |
+| `-u <用户>` | 用户名（必填） |
+| `-P <密码>` | 密码（必填，注意大写 `P`，与交互式提示密码区分） |
+| `-q` / `--quiet` | 静默模式：抑制 stderr 上的辅助信息 |
+| `--json` | 以 JSON 对象输出结果到 stdout，便于脚本解析 |
+
+**4 个动词的语义：**
+
+| 动词 | 行为 | 退出语义 |
+|------|------|---------|
+| `exec` | 在远程 cmd.exe 执行命令，等待结束，捕获 stdout/stderr/exit_code | 透传远程 `%ERRORLEVEL%` |
+| `start` | 启动远程 GUI/服务程序后立即返回（fire-and-forget，封装 `start ""` 语法） | 5 秒内拿到端标记或 cmd.exe 确认收到命令即返回 0 |
+| `upload` | 上传本地文件到远端，等待服务端确认 | 0 = 成功，非 0 = 错误 |
+| `download` | 从远端下载文件到本地，等待传输完成 | 0 = 成功，非 0 = 错误 |
+
+**退出码规范（仿 OpenSSH）：**
+
+| 退出码 | 含义 |
+|------|------|
+| `0` | 命令成功 |
+| `130` | Ctrl+C 中断（含 3 秒看门狗硬退） |
+| `253` | 协议错误 / 参数错误 / 标记丢失 |
+| `254` | 认证失败（用户名或密码错误） |
+| `255` | 连接失败（服务端不可达 / 握手超时） |
+| 其他 | 远程命令的 `%ERRORLEVEL%` 透传 |
+
+**输出分流：**
+- **stdout** — 命令真实输出（`exec`）或 JSON 结果（`--json`）
+- **stderr** — 横幅、连接日志、错误提示。`SSHC ... > out.txt` 永远只写干净的命令输出到文件
+
+**字符编码：** 非交互模式 stdout 强制 UTF-8 输出，Agent 按 UTF-8 解析中文不会乱码。交互模式不变，保留 cmd.exe 默认 GBK 编码。
+
+**调用示例：**
+
+```bash
+# 1. 一次性远程命令，拿退出码
+SSHC.exe exec 192.168.1.100 -u admin -P admin123 "tasklist | findstr MyApp.exe"
+echo 退出码=%ERRORLEVEL%
+
+# 2. 启动远程程序（fire-and-forget）
+SSHC.exe start 192.168.1.100 -u admin -P admin123 "C:\Apps\MyApp.exe --mode prod"
+
+# 3. 上传补丁文件
+SSHC.exe upload 192.168.1.100 -u admin -P admin123 "C:\patches\update.zip" "C:\app\update.zip"
+
+# 4. 下载日志
+SSHC.exe download 192.168.1.100 -u admin -P admin123 "C:\app\logs\error.log" "C:\local\error.log"
+```
+
+**JSON 输出 schema：**
+
+```json
+{
+  "ok": true,
+  "host": "192.168.1.100",
+  "username": "admin",
+  "verb": "exec",
+  "command": "tasklist",
+  "exit_code": 0,
+  "stdout": "Image Name  PID ...",
+  "stderr": "",
+  "duration_ms": 1245,
+  "error": null,
+  "timestamp": "2026-04-09T20:55:00+08:00"
+}
+```
+
+连接 / 认证失败时 `ok: false`，`error` 字段含 `kind`（`connection_refused` / `auth_failed` / `marker_not_found` 等）和 `message`。
+
+**Python 调用示例（AI Agent 场景）：**
+
+```python
+import subprocess, json
+
+result = subprocess.run([
+    "SSHC.exe", "exec", "192.168.1.100",
+    "-u", "admin", "-P", "admin123",
+    "--json",
+    "tasklist /fi \"imagename eq MyApp.exe\""
+], capture_output=True, text=True, encoding="utf-8")
+
+data = json.loads(result.stdout)
+if not data["ok"]:
+    print(f"设备不可达: {data['error']['kind']}")
+elif data["exit_code"] != 0:
+    print(f"命令失败: {data['stderr']}")
+elif "MyApp.exe" not in data["stdout"]:
+    # 启动应用
+    subprocess.run(["SSHC.exe", "start", "192.168.1.100",
+                    "-u", "admin", "-P", "admin123",
+                    "C:\\Apps\\MyApp.exe"])
+```
+
+> **设计要点：** Agent 并行调用是多进程承载（每个 SSHC 调用一个独立进程），互不共享状态。每次调用 = 完整的 connect → auth → execute → disconnect 生命周期。
 
 ### 交互命令
 
@@ -458,6 +569,27 @@ WinSimpleSSH/
 | [Costura.Fody](https://www.nuget.org/packages/Costura.Fody/) | 5.7.0 | 将依赖 DLL 嵌入 exe，实现单文件部署 |
 
 ## 更新日志
+
+### v1.2.0 (2026-04-09)
+
+**新增非交互 CLI 模式（Agent 友好）：**
+- 4 个动词命令：`exec` / `start` / `upload` / `download`
+- 一次性执行，连接 → 认证 → 执行 → 断开 全在一个进程生命周期内完成
+- `--json` 模式输出结构化结果，schema 含 ok / host / verb / exit_code / stdout / stderr / duration_ms / error / timestamp
+- 退出码规范（仿 OpenSSH）：0 / 130 / 253 / 254 / 255 + 透传远程 %ERRORLEVEL%
+- 非交互模式 stdout 强制 UTF-8 编码，中文 Agent 解析无乱码
+- Banner 全部走 stderr，stdout 永远只含命令真实输出或 JSON
+- WebSocketSharp 内置 Fatal 日志已抑制，错误输出语义化干净
+- Ctrl+C 转发 Interrupt + 3 秒看门狗硬退兜底
+- `start` 动词的 fire-and-forget 兜底：cmd.exe 收到命令但 GUI 未在 5 秒内返回时假定 detach 成功
+
+**架构改进：**
+- 客户端入口改为 verb 分派式（`SSHC <verb> <host> ...`），保留 `connect` 交互 REPL 完全无回归
+- RemoteShell 新增 `SetShellOutputHandler` 拦截接口，支持非交互模式捕获 cmd.exe 输出
+- 抽出共享 `TryConnectAndAuth` helper，所有动词复用连接+认证流程
+- OutputCapture 实现两阶段标记协议（begin marker + end marker），解决 cmd.exe 在 stdin 被管道化时 `@echo off` 失效的命令回显污染
+
+**完整设计文档见 `docs/features/non-interactive-cli/`**
 
 ### v1.1.0 (2026-04-09)
 
