@@ -4,6 +4,7 @@
     <OutputType>Exe</OutputType>
     <AssemblyName>SSHC</AssemblyName>
     <RootNamespace>SSHClient</RootNamespace>
+    <Version>1.3.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WebSocketSharp" Version="1.0.3-rc9" />

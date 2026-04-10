@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using SSHClient.Core;
 using SSHCommon.Protocol;
@@ -31,6 +32,11 @@ namespace SSHClient
                 case "-h":
                 case "--help":
                     PrintUsage();
+                    return ExitCodes.Success;
+                case "-v":
+                case "--version":
+                    var ver = Assembly.GetExecutingAssembly().GetName().Version;
+                    Console.WriteLine($"SSHC v{ver.Major}.{ver.Minor}.{ver.Build}");
                     return ExitCodes.Success;
                 default:
                     Console.Error.WriteLine($"Unknown verb: {verb}");
@@ -520,7 +526,9 @@ namespace SSHClient
 
         static void PrintUsage()
         {
-            Console.WriteLine("SSHC - Simple SSH-like tool over WebSocket / 基于 WebSocket 的简易 SSH 工具");
+            var ver = Assembly.GetExecutingAssembly().GetName().Version;
+            Console.WriteLine($"SSHC v{ver.Major}.{ver.Minor}.{ver.Build} - Simple SSH-like tool over WebSocket");
+            Console.WriteLine($"基于 WebSocket 的简易 SSH 工具");
             Console.WriteLine();
             Console.WriteLine("=== Interactive mode / 交互模式 ===");
             Console.WriteLine("  SSHC.exe connect <host> [-p <port>] -u <username>");

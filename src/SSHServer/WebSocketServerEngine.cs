@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Security.Principal;
 using SSHServer.Config;
 using SSHServer.Core;
@@ -37,7 +38,8 @@ namespace SSHServer
 
             ConnectionManager.StartTimeoutTimer();
 
-            SLog.Info($"SSH Server started on port {config.Port}");
+            var version = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+            SLog.Info($"SSH Server v{version} started on port {config.Port}");
 
             // 记录 IP 白名单状态
             if (config.IsWhitelistEnabled)
@@ -127,7 +129,8 @@ namespace SSHServer
                     return p;
             }
 
-            throw new FileNotFoundException("server.json not found", "server.json");
+            // 不存在则返回 exe 同级目录的默认路径，由 ServerConfig.Load() 自动生成
+            return Path.Combine(exeDir, "server.json");
         }
     }
 }

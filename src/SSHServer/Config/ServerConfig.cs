@@ -59,8 +59,33 @@ namespace SSHServer.Config
 
         public static ServerConfig Load(string path)
         {
+            if (!File.Exists(path))
+            {
+                var defaults = CreateDefaults();
+                File.WriteAllText(path, JsonConvert.SerializeObject(defaults, Formatting.Indented));
+                return defaults;
+            }
+
             var json = File.ReadAllText(path);
             return JsonConvert.DeserializeObject<ServerConfig>(json);
+        }
+
+        private static ServerConfig CreateDefaults()
+        {
+            return new ServerConfig
+            {
+                Port = 22222,
+                IpWhitelist = new List<string>
+                {
+                    "127.0.0.1",
+                    "192.168.0.*",
+                    "192.168.1.*"
+                },
+                Users = new List<UserConfig>
+                {
+                    new UserConfig { Username = "admin", Password = "admin123" }
+                }
+            };
         }
     }
 
