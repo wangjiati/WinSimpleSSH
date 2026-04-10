@@ -77,6 +77,9 @@ Output: `src/SSHServer/bin/Debug/net452/SSHServer.exe` and `src/SSHClient/bin/De
 - 两阶段标记协议解决 cmd.exe 在 stdin 被管道化时 `@echo off` 失效的命令回显污染
 - WebSocketSharp 内置 Fatal log 已通过 `_ws.Log.Output = no-op` 抑制
 - Ctrl+C 转发 Interrupt + 3 秒看门狗硬退兜底
+- 密码可由 `-P <pwd>` CLI 参数传递，也可由 `SSHC_PASSWORD` 环境变量传递。
+  优先级：CLI > 环境变量 > 报错。环境变量方式更安全（不进 shell history，
+  不进 tasklist 命令行字段），是 Agent 调用的推荐方式
 
 ## Requirements Doc
 

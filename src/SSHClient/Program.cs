@@ -326,14 +326,29 @@ namespace SSHClient
             }
             opts.Positional = positional.ToString();
 
+            // 密码回退到 SSHC_PASSWORD 环境变量。优先级：CLI -P > 环境变量 > 报错
+            // 用环境变量传密码比 CLI -P 更安全：不进 shell history，不出现在 tasklist 默认视图，
+            // 父进程一次设置后所有 SSHC 子进程自动继承。是 Agent 调用的推荐方式。
+            if (string.IsNullOrEmpty(opts.Password))
+            {
+                var envPwd = Environment.GetEnvironmentVariable("SSHC_PASSWORD");
+                if (!string.IsNullOrEmpty(envPwd))
+                    opts.Password = envPwd;
+            }
+
             if (string.IsNullOrEmpty(opts.Host))
             {
                 Console.Error.WriteLine("Missing <host>");
                 return null;
             }
-            if (string.IsNullOrEmpty(opts.Username) || string.IsNullOrEmpty(opts.Password))
+            if (string.IsNullOrEmpty(opts.Username))
             {
-                Console.Error.WriteLine("Missing -u <username> or -P <password>");
+                Console.Error.WriteLine("Missing -u <username>");
+                return null;
+            }
+            if (string.IsNullOrEmpty(opts.Password))
+            {
+                Console.Error.WriteLine("Missing password: pass -P <pwd> or set SSHC_PASSWORD env var");
                 return null;
             }
             return opts;
@@ -505,27 +520,50 @@ namespace SSHClient
 
         static void PrintUsage()
         {
-            Console.WriteLine("SSH Client - Simple SSH-like tool over WebSocket");
-            Console.WriteLine("SSH 客户端 - 基于 WebSocket 的简易 SSH 工具");
+            Console.WriteLine("SSHC - Simple SSH-like tool over WebSocket / 基于 WebSocket 的简易 SSH 工具");
             Console.WriteLine();
-            Console.WriteLine("=== Usage / 用法 ===");
+            Console.WriteLine("=== Interactive mode / 交互模式 ===");
             Console.WriteLine("  SSHC.exe connect <host> [-p <port>] -u <username>");
+            Console.WriteLine("      Open interactive ssh> REPL (prompts for password)");
+            Console.WriteLine("      进入交互式 ssh> 命令行（会提示输入密码）");
             Console.WriteLine();
-            Console.WriteLine("=== Options / 选项 ===");
-            Console.WriteLine("  -p <port>      Server port (default: 22222) / 服务端口（默认: 22222）");
-            Console.WriteLine("  -u <username>  Username for authentication / 认证用户名");
+            Console.WriteLine("=== Non-interactive mode / 非交互模式 (Agent / 脚本调用) ===");
+            Console.WriteLine("  SSHC.exe exec     <host> -u <user> -P <pwd> [opts] \"<command>\"");
+            Console.WriteLine("  SSHC.exe start    <host> -u <user> -P <pwd> [opts] \"<program>\"");
+            Console.WriteLine("  SSHC.exe upload   <host> -u <user> -P <pwd> [opts] <local> <remote>");
+            Console.WriteLine("  SSHC.exe download <host> -u <user> -P <pwd> [opts] <remote> <local>");
             Console.WriteLine();
-            Console.WriteLine("=== Interactive Commands / 交互命令 ===");
+            Console.WriteLine("=== Options for non-interactive verbs / 非交互动词选项 ===");
+            Console.WriteLine("  -p <port>      Server port (default: 22222) / 服务端端口（默认: 22222）");
+            Console.WriteLine("  -u <user>      Username (required) / 用户名（必填）");
+            Console.WriteLine("  -P <pwd>       Password (required, can use SSHC_PASSWORD env var instead)");
+            Console.WriteLine("                 密码（必填，也可改用 SSHC_PASSWORD 环境变量）");
+            Console.WriteLine("  -q, --quiet    Suppress banner output / 静默模式");
+            Console.WriteLine("  --json         Emit result as JSON / 输出 JSON 结构化结果");
+            Console.WriteLine();
+            Console.WriteLine("=== Environment variables / 环境变量 ===");
+            Console.WriteLine("  SSHC_PASSWORD  Fallback for -P; safer than CLI flag (no shell history)");
+            Console.WriteLine("                 -P 的回退值；比 CLI 参数更安全（不进 shell history）");
+            Console.WriteLine();
+            Console.WriteLine("=== Exit codes / 退出码 ===");
+            Console.WriteLine("  0        Command succeeded / 命令成功");
+            Console.WriteLine("  130      Interrupted (Ctrl+C) / 被中断");
+            Console.WriteLine("  253      Protocol / argument error / 协议或参数错误");
+            Console.WriteLine("  254      Authentication failed / 认证失败");
+            Console.WriteLine("  255      Connection failed / 连接失败");
+            Console.WriteLine("  other    Passthrough of remote %ERRORLEVEL% / 透传远程 %ERRORLEVEL%");
+            Console.WriteLine();
+            Console.WriteLine("=== Interactive REPL commands (after connect) / 交互模式命令 ===");
             Console.WriteLine("  <command>                    Execute remote cmd / 执行远程命令");
             Console.WriteLine("  upload <local> [remote]      Upload file / 上传文件");
             Console.WriteLine("  download <remote> [local]    Download file / 下载文件");
             Console.WriteLine("  clients, list                List connected clients / 列出已连接客户端");
-            Console.WriteLine("  kick <id>                    Kick a client / 断开指定客户端");
-            Console.WriteLine("  kick all                     Kick all other clients / 断开其他所有客户端");
+            Console.WriteLine("  kick <id|all>                Kick client(s) / 断开客户端");
+            Console.WriteLine("  cls, clear                   Clear screen / 清屏");
             Console.WriteLine("  help                         Show help / 显示帮助");
             Console.WriteLine("  exit, quit                   Disconnect / 断开连接");
             Console.WriteLine();
-            Console.WriteLine("=== Shortcuts / 快捷键 ===");
+            Console.WriteLine("=== Shortcuts (interactive only) / 快捷键 ===");
             Console.WriteLine("  Ctrl+C     Interrupt command / 中断命令");
             Console.WriteLine("  Up/Down    History / 历史命令");
         }
