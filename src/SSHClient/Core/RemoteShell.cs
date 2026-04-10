@@ -1,7 +1,9 @@
 using System;
+using System.Text;
 using System.Timers;
 using Newtonsoft.Json;
 using WebSocketSharp;
+using SSHCommon.Crypto;
 using SSHCommon.Protocol;
 
 namespace SSHClient.Core
@@ -21,7 +23,7 @@ namespace SSHClient.Core
             lock (_sendLock)
             {
                 if (_ws?.IsAlive == true)
-                    _ws.Send(data);
+                    _ws.Send(Obfuscator.Encode(Encoding.UTF8.GetBytes(data)));
             }
         }
 
@@ -37,10 +39,9 @@ namespace SSHClient.Core
 
             _ws.OnMessage += (sender, e) =>
             {
-                if (e.Data != null)
-                {
-                    HandleMessage(e.Data);
-                }
+                if (e.RawData == null || e.RawData.Length == 0) return;
+                var raw = Encoding.UTF8.GetString(Obfuscator.Decode(e.RawData));
+                HandleMessage(raw);
             };
 
             _ws.OnClose += (sender, e) =>

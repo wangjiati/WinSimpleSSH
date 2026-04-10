@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Timers;
 using Newtonsoft.Json;
 using WebSocketSharp;
 using WebSocketSharp.Server;
+using SSHCommon.Crypto;
 using SSHCommon.Protocol;
 using SSHServer.Config;
 
@@ -155,14 +157,25 @@ namespace SSHServer.Core
         // ===== WebSocket 事件 =====
         protected override void OnOpen()
         {
+            var clientIp = Context.UserEndPoint.Address.ToString();
+            var endpoint = Context.UserEndPoint.ToString();
+
+            // IP 白名单检查
+            if (!_sharedConfig.IsIpAllowed(clientIp))
+            {
+                SLog.Warn($"[Blocked] IP 不在白名单 / IP not whitelisted: {endpoint}");
+                Context.WebSocket.Close(1008, "IP not allowed");
+                return;
+            }
+
             _session = new ClientSession
             {
                 ConnectionId = ID,
-                RemoteEndpoint = Context.UserEndPoint.ToString(),
+                RemoteEndpoint = endpoint,
                 ConnectTime = DateTime.Now,
                 LastActivity = DateTime.Now,
                 FileTransfer = new FileTransferHandler(),
-                SendJson = (json) => Send(json),
+                SendJson = (json) => Send(Obfuscator.Encode(Encoding.UTF8.GetBytes(json))),
                 CloseConnection = () => { try { Context.WebSocket.Close(); } catch { } }
             };
 
@@ -176,12 +189,14 @@ namespace SSHServer.Core
 
         protected override void OnMessage(MessageEventArgs e)
         {
-            if (e.Data == null) return;
+            if (_session == null || e.RawData == null || e.RawData.Length == 0) return;
+
+            var raw = Encoding.UTF8.GetString(Obfuscator.Decode(e.RawData));
 
             _session.LastActivity = DateTime.Now;
             _session.TimeoutWarningTime = null;
 
-            HandleMessage(e.Data);
+            HandleMessage(raw);
         }
 
         protected override void OnClose(CloseEventArgs e)

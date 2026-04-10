@@ -39,6 +39,16 @@ namespace SSHServer
 
             SLog.Info($"SSH Server started on port {config.Port}");
 
+            // 记录 IP 白名单状态
+            if (config.IsWhitelistEnabled)
+            {
+                SLog.Info($"IP 白名单已启用 / IP whitelist enabled: {string.Join(", ", config.IpWhitelist)}");
+            }
+            else
+            {
+                SLog.Warn("IP 白名单未配置，允许所有 IP 连接 / IP whitelist not configured, all IPs allowed");
+            }
+
             // 记录管理员权限状态
             var isAdmin = IsRunningAsAdmin();
             SLog.Info(isAdmin
