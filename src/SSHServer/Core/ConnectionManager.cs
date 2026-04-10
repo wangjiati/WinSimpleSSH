@@ -155,10 +155,21 @@ namespace SSHServer.Core
         // ===== WebSocket 事件 =====
         protected override void OnOpen()
         {
+            var clientIp = Context.UserEndPoint.Address.ToString();
+            var endpoint = Context.UserEndPoint.ToString();
+
+            // IP 白名单检查
+            if (!_sharedConfig.IsIpAllowed(clientIp))
+            {
+                SLog.Warn($"[Blocked] IP 不在白名单 / IP not whitelisted: {endpoint}");
+                Context.WebSocket.Close(1008, "IP not allowed");
+                return;
+            }
+
             _session = new ClientSession
             {
                 ConnectionId = ID,
-                RemoteEndpoint = Context.UserEndPoint.ToString(),
+                RemoteEndpoint = endpoint,
                 ConnectTime = DateTime.Now,
                 LastActivity = DateTime.Now,
                 FileTransfer = new FileTransferHandler(),
@@ -176,7 +187,7 @@ namespace SSHServer.Core
 
         protected override void OnMessage(MessageEventArgs e)
         {
-            if (e.Data == null) return;
+            if (e.Data == null || _session == null) return;
 
             _session.LastActivity = DateTime.Now;
             _session.TimeoutWarningTime = null;
