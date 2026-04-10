@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Text;
 using Newtonsoft.Json;
 using WebSocketSharp;
+using SSHCommon.Crypto;
 using SSHCommon.Protocol;
 
 namespace SSHClient.Core
@@ -99,7 +101,7 @@ namespace SSHClient.Core
             lock (sendLock)
             {
                 if (ws?.IsAlive == true)
-                    ws.Send(data);
+                    ws.Send(Obfuscator.Encode(Encoding.UTF8.GetBytes(data)));
             }
         }
 
