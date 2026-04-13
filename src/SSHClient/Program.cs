@@ -59,9 +59,14 @@ namespace SSHClient
             int i = 1;
             while (i < args.Length)
             {
-                if (args[i] == "-p" && i + 1 < args.Length)
+                if (args[i] == "--port" && i + 1 < args.Length)
                 {
                     int.TryParse(args[i + 1], out port);
+                    i += 2;
+                }
+                else if (args[i] == "-p" && i + 1 < args.Length)
+                {
+                    password = args[i + 1];
                     i += 2;
                 }
                 else if (args[i] == "-u" && i + 1 < args.Length)
@@ -82,12 +87,23 @@ namespace SSHClient
 
             if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(username))
             {
-                Console.WriteLine("Usage: SSHC connect <host> -p <port> -u <username>");
+                Console.WriteLine("Usage: SSHC connect <host> [--port <port>] -u <username> [-p <password>]");
                 return ExitCodes.ProtocolError;
             }
 
-            Console.Write("Password: ");
-            password = ReadPassword();
+            // 密码优先级：CLI -p > 环境变量 SSHC_PASSWORD > 手动输入
+            if (string.IsNullOrEmpty(password))
+            {
+                var envPwd = Environment.GetEnvironmentVariable("SSHC_PASSWORD");
+                if (!string.IsNullOrEmpty(envPwd))
+                    password = envPwd;
+            }
+
+            if (string.IsNullOrEmpty(password))
+            {
+                Console.Write("Password: ");
+                password = ReadPassword();
+            }
 
             var shell = new RemoteShell();
             var authResult = new ManualResetEvent(false);
@@ -288,7 +304,7 @@ namespace SSHClient
         {
             if (args.Length < 2)
             {
-                Console.Error.WriteLine($"Usage: SSHC {verb} <host> -u <username> -P <password> [options] <args...>");
+                Console.Error.WriteLine($"Usage: SSHC {verb} <host> -u <username> -p <password> [options] <args...>");
                 return null;
             }
             var opts = new CommonOpts { Host = args[1] };
@@ -299,9 +315,9 @@ namespace SSHClient
             {
                 switch (args[idx])
                 {
-                    case "-p":
-                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-p requires a value"); return null; }
-                        if (!int.TryParse(args[idx + 1], out opts.Port)) { Console.Error.WriteLine("-p value must be an integer"); return null; }
+                    case "--port":
+                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("--port requires a value"); return null; }
+                        if (!int.TryParse(args[idx + 1], out opts.Port)) { Console.Error.WriteLine("--port value must be an integer"); return null; }
                         idx += 2;
                         break;
                     case "-u":
@@ -309,8 +325,8 @@ namespace SSHClient
                         opts.Username = args[idx + 1];
                         idx += 2;
                         break;
-                    case "-P":
-                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-P requires a value"); return null; }
+                    case "-p":
+                        if (idx + 1 >= args.Length) { Console.Error.WriteLine("-p requires a value"); return null; }
                         opts.Password = args[idx + 1];
                         idx += 2;
                         break;
@@ -354,7 +370,7 @@ namespace SSHClient
             }
             if (string.IsNullOrEmpty(opts.Password))
             {
-                Console.Error.WriteLine("Missing password: pass -P <pwd> or set SSHC_PASSWORD env var");
+                Console.Error.WriteLine("Missing password: pass -p <pwd> or set SSHC_PASSWORD env var");
                 return null;
             }
             return opts;
@@ -531,21 +547,21 @@ namespace SSHClient
             Console.WriteLine($"基于 WebSocket 的简易 SSH 工具");
             Console.WriteLine();
             Console.WriteLine("=== Interactive mode / 交互模式 ===");
-            Console.WriteLine("  SSHC.exe connect <host> [-p <port>] -u <username>");
-            Console.WriteLine("      Open interactive ssh> REPL (prompts for password)");
-            Console.WriteLine("      进入交互式 ssh> 命令行（会提示输入密码）");
+            Console.WriteLine("  SSHC.exe connect <host> [--port <port>] -u <username> [-p <password>]");
+            Console.WriteLine("      Open interactive ssh> REPL (prompts for password if -p omitted)");
+            Console.WriteLine("      进入交互式 ssh> 命令行（省略 -p 则提示输入密码）");
             Console.WriteLine();
             Console.WriteLine("=== Non-interactive mode / 非交互模式 (Agent / 脚本调用) ===");
-            Console.WriteLine("  SSHC.exe exec     <host> -u <user> -P <pwd> [opts] \"<command>\"");
-            Console.WriteLine("  SSHC.exe start    <host> -u <user> -P <pwd> [opts] \"<program>\"");
-            Console.WriteLine("  SSHC.exe upload   <host> -u <user> -P <pwd> [opts] <local> <remote>");
-            Console.WriteLine("  SSHC.exe download <host> -u <user> -P <pwd> [opts] <remote> <local>");
+            Console.WriteLine("  SSHC.exe exec     <host> -u <user> -p <pwd> [opts] \"<command>\"");
+            Console.WriteLine("  SSHC.exe start    <host> -u <user> -p <pwd> [opts] \"<program>\"");
+            Console.WriteLine("  SSHC.exe upload   <host> -u <user> -p <pwd> [opts] <local> <remote>");
+            Console.WriteLine("  SSHC.exe download <host> -u <user> -p <pwd> [opts] <remote> <local>");
             Console.WriteLine();
-            Console.WriteLine("=== Options for non-interactive verbs / 非交互动词选项 ===");
-            Console.WriteLine("  -p <port>      Server port (default: 22222) / 服务端端口（默认: 22222）");
+            Console.WriteLine("=== Options / 选项 ===");
+            Console.WriteLine("  --port <port>  Server port (default: 22222) / 服务端端口（默认: 22222）");
             Console.WriteLine("  -u <user>      Username (required) / 用户名（必填）");
-            Console.WriteLine("  -P <pwd>       Password (required, can use SSHC_PASSWORD env var instead)");
-            Console.WriteLine("                 密码（必填，也可改用 SSHC_PASSWORD 环境变量）");
+            Console.WriteLine("  -p <pwd>       Password (can also use SSHC_PASSWORD env var)");
+            Console.WriteLine("                 密码（也可改用 SSHC_PASSWORD 环境变量）");
             Console.WriteLine("  -q, --quiet    Suppress banner output / 静默模式");
             Console.WriteLine("  --json         Emit result as JSON / 输出 JSON 结构化结果");
             Console.WriteLine();

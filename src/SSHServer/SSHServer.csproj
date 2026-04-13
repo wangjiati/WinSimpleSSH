@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net452</TargetFramework>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <AssemblyName>SSHServer</AssemblyName>
     <RootNamespace>SSHServer</RootNamespace>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>

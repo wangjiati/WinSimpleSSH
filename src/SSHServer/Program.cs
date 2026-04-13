@@ -21,6 +21,9 @@ namespace SSHServer
         private static ConsoleCtrlDelegate _ctrlHandler;
 
         [DllImport("kernel32.dll")]
+        static extern bool AllocConsole();
+
+        [DllImport("kernel32.dll")]
         static extern IntPtr GetStdHandle(int nStdHandle);
 
         [DllImport("kernel32.dll")]
@@ -51,9 +54,24 @@ namespace SSHServer
 
         static void Main(string[] args)
         {
-            DisableQuickEditMode();
-            var version = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
-            Console.Title = $"SSH Server v{version}";
+            // 检查是否显示控制台窗口
+            bool showConsole = false;
+            foreach (var arg in args)
+            {
+                if (arg.Equals("--console", StringComparison.OrdinalIgnoreCase))
+                {
+                    showConsole = true;
+                    break;
+                }
+            }
+
+            if (showConsole)
+            {
+                AllocConsole();
+                DisableQuickEditMode();
+                var version = Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+                Console.Title = $"SSH Server v{version}";
+            }
 
             try
             {
