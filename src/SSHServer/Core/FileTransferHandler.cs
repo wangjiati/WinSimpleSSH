@@ -167,37 +167,30 @@ namespace SSHServer.Core
             return _uploadInfo?.Sha256;
         }
 
-        public static FileTransferStart PrepareDownload(string remotePath, out byte[] fileData)
+        public static FileTransferStart PrepareDownload(string remotePath)
         {
             if (!File.Exists(remotePath))
-            {
-                fileData = null;
                 return null;
-            }
 
             var fileInfo = new FileInfo(remotePath);
-            fileData = File.ReadAllBytes(remotePath);
 
             const int chunkSize = 65536; // 64KB
-            var totalChunks = (int)Math.Ceiling((double)fileData.Length / chunkSize);
+            var totalChunks = CalculateTotalChunks(fileInfo.Length, chunkSize);
 
             return new FileTransferStart
             {
                 FileName = Path.GetFileName(remotePath),
-                FileSize = fileData.Length,
+                FileSize = fileInfo.Length,
                 ChunkSize = chunkSize,
                 TotalChunks = totalChunks,
-                Sha256 = ComputeSha256(fileData),
                 RemotePath = remotePath
             };
         }
 
-        public static FileChunk BuildChunk(byte[] fileData, int index, int chunkSize)
+        public static FileChunk BuildChunk(byte[] buffer, int length, int index)
         {
-            var offset = index * chunkSize;
-            var length = Math.Min(chunkSize, fileData.Length - offset);
             var chunk = new byte[length];
-            Buffer.BlockCopy(fileData, offset, chunk, 0, length);
+            Buffer.BlockCopy(buffer, 0, chunk, 0, length);
 
             return new FileChunk
             {
@@ -206,15 +199,15 @@ namespace SSHServer.Core
             };
         }
 
-        private static string ComputeSha256(byte[] data)
+        private static int CalculateTotalChunks(long fileSize, int chunkSize)
         {
-            using (var sha = SHA256.Create())
-            {
-                return ToHex(sha.ComputeHash(data));
-            }
+            var chunks = (fileSize + chunkSize - 1) / chunkSize;
+            if (chunks > int.MaxValue)
+                throw new InvalidOperationException("File is too large for the current download protocol");
+            return (int)chunks;
         }
 
-        private static string ToHex(byte[] hash)
+        public static string ToHex(byte[] hash)
         {
             var sb = new StringBuilder(hash.Length * 2);
             foreach (var b in hash)

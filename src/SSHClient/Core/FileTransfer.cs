@@ -120,11 +120,15 @@ namespace SSHClient.Core
             {
                 case MessageType.DownloadStart:
                     var info = JsonConvert.DeserializeObject<FileTransferStart>(msg.Data);
+                    state?.Dispose();
                     state = new DownloadState
                     {
                         Info = info,
                         LocalPath = localPath ?? info.FileName,
-                        BytesReceived = 0
+                        BytesReceived = 0,
+                        NextChunkIndex = 0,
+                        Stream = new FileStream(localPath ?? info.FileName, FileMode.Create, FileAccess.Write),
+                        Hash = SHA256.Create()
                     };
                     break;
 
@@ -132,21 +136,66 @@ namespace SSHClient.Core
                     if (state != null)
                     {
                         var chunk = JsonConvert.DeserializeObject<FileChunk>(msg.Data);
-                        var bytes = Convert.FromBase64String(chunk.Data);
-                        using (var fs = new FileStream(state.LocalPath, chunk.Index == 0 ? FileMode.Create : FileMode.Append))
+                        if (chunk?.Data == null)
                         {
-                            fs.Write(bytes, 0, bytes.Length);
+                            state.Error = "Invalid download chunk";
+                            state.Dispose();
+                            break;
                         }
-                        state.BytesReceived += bytes.Length;
 
-                        var progress = (double)(chunk.Index + 1) / state.Info.TotalChunks;
+                        if (chunk.Index != state.NextChunkIndex)
+                        {
+                            state.Error = $"Download chunk order mismatch: expected {state.NextChunkIndex}, got {chunk.Index}";
+                            state.Dispose();
+                            break;
+                        }
+
+                        var bytes = Convert.FromBase64String(chunk.Data);
+                        state.Stream.Write(bytes, 0, bytes.Length);
+                        state.Hash.TransformBlock(bytes, 0, bytes.Length, null, 0);
+                        state.BytesReceived += bytes.Length;
+                        state.NextChunkIndex++;
+
+                        var progress = state.Info.TotalChunks == 0 ? 1.0 : (double)(chunk.Index + 1) / state.Info.TotalChunks;
                         DrawProgressBar(progress, state.Info.FileSize, state.BytesReceived);
                     }
                     break;
 
                 case MessageType.DownloadComplete:
+                    if (state != null)
+                    {
+                        var complete = JsonConvert.DeserializeObject<FileTransferComplete>(msg.Data);
+                        FinishDownload(state, complete);
+                    }
                     if (!Quiet) Console.Error.WriteLine();
                     break;
+            }
+        }
+
+        private static void FinishDownload(DownloadState state, FileTransferComplete complete)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(state.Error))
+                    return;
+
+                if (state.BytesReceived != state.Info.FileSize)
+                    state.Error = $"Download size mismatch: expected {state.Info.FileSize}, got {state.BytesReceived}";
+                else if (state.NextChunkIndex != state.Info.TotalChunks)
+                    state.Error = $"Download chunk count mismatch: expected {state.Info.TotalChunks}, got {state.NextChunkIndex}";
+
+                state.Hash.TransformFinalBlock(new byte[0], 0, 0);
+                var expectedHash = !string.IsNullOrEmpty(complete?.Sha256) ? complete.Sha256 : state.Info.Sha256;
+                if (string.IsNullOrEmpty(state.Error) && !string.IsNullOrEmpty(expectedHash))
+                {
+                    var actualHash = ToHex(state.Hash.Hash);
+                    if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                        state.Error = $"Download hash mismatch: expected {expectedHash}, got {actualHash}";
+                }
+            }
+            finally
+            {
+                state.Dispose();
             }
         }
 
@@ -186,10 +235,32 @@ namespace SSHClient.Core
         }
     }
 
-    public class DownloadState
+    public class DownloadState : IDisposable
     {
         public FileTransferStart Info { get; set; }
         public string LocalPath { get; set; }
         public long BytesReceived { get; set; }
+        public int NextChunkIndex { get; set; }
+        public string Error { get; set; }
+        public FileStream Stream { get; set; }
+        public SHA256 Hash { get; set; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Stream?.Close();
+                Stream?.Dispose();
+            }
+            catch { }
+            Stream = null;
+
+            try
+            {
+                Hash?.Dispose();
+            }
+            catch { }
+            Hash = null;
+        }
     }
 }

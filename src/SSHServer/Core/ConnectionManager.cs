@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Timers;
 using Newtonsoft.Json;
@@ -424,25 +425,39 @@ namespace SSHServer.Core
                     return;
                 }
 
-                var startInfo = FileTransferHandler.PrepareDownload(remotePath, out var fileData);
+                var startInfo = FileTransferHandler.PrepareDownload(remotePath);
 
                 _session.Send(new ProtocolMessage(MessageType.DownloadStart,
                     JsonConvert.SerializeObject(startInfo)));
 
-                for (int i = 0; i < startInfo.TotalChunks; i++)
+                using (var fs = new FileStream(remotePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var sha = SHA256.Create())
                 {
-                    var chunk = FileTransferHandler.BuildChunk(fileData, i, startInfo.ChunkSize);
-                    _session.Send(new ProtocolMessage(MessageType.DownloadChunk,
-                        JsonConvert.SerializeObject(chunk)));
-                }
-
-                _session.Send(new ProtocolMessage(MessageType.DownloadComplete,
-                    JsonConvert.SerializeObject(new FileTransferComplete
+                    var buffer = new byte[startInfo.ChunkSize];
+                    for (int i = 0; i < startInfo.TotalChunks; i++)
                     {
-                        Success = true,
-                        Message = "Download completed",
-                        FileName = startInfo.FileName
-                    })));
+                        var read = fs.Read(buffer, 0, buffer.Length);
+                        if (read <= 0)
+                            throw new EndOfStreamException($"Unexpected end of file while reading chunk {i}");
+
+                        sha.TransformBlock(buffer, 0, read, null, 0);
+
+                        var chunk = FileTransferHandler.BuildChunk(buffer, read, i);
+                        _session.Send(new ProtocolMessage(MessageType.DownloadChunk,
+                            JsonConvert.SerializeObject(chunk)));
+                    }
+
+                    sha.TransformFinalBlock(new byte[0], 0, 0);
+
+                    _session.Send(new ProtocolMessage(MessageType.DownloadComplete,
+                        JsonConvert.SerializeObject(new FileTransferComplete
+                        {
+                            Success = true,
+                            Sha256 = FileTransferHandler.ToHex(sha.Hash),
+                            Message = "Download completed",
+                            FileName = startInfo.FileName
+                        })));
+                }
             }
             catch (Exception ex)
             {
