@@ -65,6 +65,9 @@ namespace SSHCommon.Protocol
         [JsonProperty("totalChunks")]
         public int TotalChunks { get; set; }
 
+        [JsonProperty("sha256")]
+        public string Sha256 { get; set; }
+
         [JsonProperty("remotePath")]
         public string RemotePath { get; set; }
     }
@@ -84,6 +87,9 @@ namespace SSHCommon.Protocol
     {
         [JsonProperty("success")]
         public bool Success { get; set; }
+
+        [JsonProperty("sha256")]
+        public string Sha256 { get; set; }
 
         [JsonProperty("message")]
         public string Message { get; set; }

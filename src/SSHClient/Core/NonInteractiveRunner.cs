@@ -69,6 +69,7 @@ namespace SSHClient.Core
                 return FinishWithError(result, sw, "protocol_error", $"Local file not found: {localPath}");
 
             var shell = new RemoteShell();
+            string transferError = null;
             if (!TryConnectAndAuth(shell, result, sw, out int connErr, out ManualResetEvent transferDone, extraSignal: null))
                 return connErr;
 
@@ -76,11 +77,23 @@ namespace SSHClient.Core
 
             try
             {
+                shell.SetSignalHandler(signal =>
+                {
+                    if (signal == "TRANSFER_DONE")
+                        transferDone.Set();
+                    else if (signal.StartsWith("TRANSFER_FAIL:"))
+                        transferError = signal.Substring("TRANSFER_FAIL:".Length);
+                });
                 shell.Upload(localPath, remotePath);
                 if (!transferDone.WaitOne(ExecTimeoutMs))
                 {
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Upload completion signal not received");
+                }
+                if (!string.IsNullOrEmpty(transferError))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", transferError);
                 }
             }
             catch (Exception ex)

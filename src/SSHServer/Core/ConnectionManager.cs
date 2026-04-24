@@ -269,7 +269,7 @@ namespace SSHServer.Core
                     break;
 
                 case MessageType.UploadComplete:
-                    if (RequireAuth()) HandleUploadComplete();
+                    if (RequireAuth()) HandleUploadComplete(msg.Data);
                     break;
 
                 case MessageType.DownloadStart:
@@ -370,18 +370,19 @@ namespace SSHServer.Core
             {
                 if (!_session.FileTransfer.WriteChunk(data))
                 {
-                    // 上传未开始或已结束，静默忽略多余的 chunk
+                    SLog.Warn($"[Upload] {_session.Tag} 上传块校验失败");
                 }
             }
             catch (Exception ex)
             {
+                _session.FileTransfer.FailUpload(ex.Message);
                 SLog.Error($"Upload chunk failed", ex);
             }
         }
 
-        private void HandleUploadComplete()
+        private void HandleUploadComplete(string data)
         {
-            var result = _session.FileTransfer.FinishUpload();
+            var result = _session.FileTransfer.FinishUpload(data);
             if (result.Success)
             {
                 SLog.Info($"[Upload] {_session.Tag} 上传完成: {result.FileName}");

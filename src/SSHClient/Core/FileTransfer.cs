@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using Newtonsoft.Json;
 using WebSocketSharp;
@@ -29,64 +30,72 @@ namespace SSHClient.Core
             }
 
             var fileInfo = new FileInfo(localPath);
-            var fileData = File.ReadAllBytes(localPath);
-            var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
+            var totalChunks = CalculateTotalChunks(fileInfo.Length);
 
             var startMsg = new ProtocolMessage(MessageType.UploadStart,
                 JsonConvert.SerializeObject(new FileTransferStart
                 {
                     FileName = Path.GetFileName(localPath),
-                    FileSize = fileData.Length,
+                    FileSize = fileInfo.Length,
                     ChunkSize = ChunkSize,
                     TotalChunks = totalChunks,
                     RemotePath = remotePath ?? Path.GetFileName(localPath)
                 }));
             SendLocked(sendLock, ws, startMsg.ToJson());
 
-            // 暂存文件数据供 SendUploadChunks 使用
-            _pendingUploadData = fileData;
             _pendingUploadInfo = fileInfo;
             return true;
         }
 
-        [ThreadStatic]
-        private static byte[] _pendingUploadData;
         [ThreadStatic]
         private static FileInfo _pendingUploadInfo;
 
         /// <summary>发送所有数据块和完成消息（需在 SendUploadStart 成功且收到 UploadReady 后调用）</summary>
         public static void SendUploadChunks(object sendLock, WebSocket ws, string localPath)
         {
-            var fileData = _pendingUploadData;
             var fileInfo = _pendingUploadInfo;
-            if (fileData == null) return;
+            if (fileInfo == null) return;
 
-            var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
-
-            for (int i = 0; i < totalChunks; i++)
+            using (var fs = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var sha = SHA256.Create())
             {
-                var offset = i * ChunkSize;
-                var length = Math.Min(ChunkSize, fileData.Length - offset);
-                var chunk = new byte[length];
-                Buffer.BlockCopy(fileData, offset, chunk, 0, length);
+                var totalChunks = CalculateTotalChunks(fs.Length);
+                var buffer = new byte[ChunkSize];
+                long transferred = 0;
 
-                var chunkMsg = new ProtocolMessage(MessageType.UploadChunk,
-                    JsonConvert.SerializeObject(new FileChunk
+                for (int i = 0; i < totalChunks; i++)
+                {
+                    var read = fs.Read(buffer, 0, buffer.Length);
+                    if (read <= 0)
+                        throw new EndOfStreamException($"Unexpected end of file while reading chunk {i}");
+
+                    sha.TransformBlock(buffer, 0, read, null, 0);
+
+                    var chunkMsg = new ProtocolMessage(MessageType.UploadChunk,
+                        JsonConvert.SerializeObject(new FileChunk
+                        {
+                            Index = i,
+                            Data = Convert.ToBase64String(buffer, 0, read)
+                        }));
+                    SendLocked(sendLock, ws, chunkMsg.ToJson());
+
+                    transferred += read;
+                    var progress = totalChunks == 0 ? 1.0 : (double)(i + 1) / totalChunks;
+                    DrawProgressBar(progress, fileInfo.Length, transferred);
+                }
+
+                sha.TransformFinalBlock(new byte[0], 0, 0);
+
+                var completeMsg = new ProtocolMessage(MessageType.UploadComplete,
+                    JsonConvert.SerializeObject(new FileTransferComplete
                     {
-                        Index = i,
-                        Data = Convert.ToBase64String(chunk)
+                        Success = true,
+                        Sha256 = ToHex(sha.Hash)
                     }));
-                SendLocked(sendLock, ws, chunkMsg.ToJson());
-
-                var progress = (double)(i + 1) / totalChunks;
-                DrawProgressBar(progress, fileInfo.Length, offset + length);
+                SendLocked(sendLock, ws, completeMsg.ToJson());
             }
 
-            var completeMsg = new ProtocolMessage(MessageType.UploadComplete, "");
-            SendLocked(sendLock, ws, completeMsg.ToJson());
-
             if (!Quiet) Console.Error.WriteLine();
-            _pendingUploadData = null;
             _pendingUploadInfo = null;
         }
 
@@ -158,6 +167,22 @@ namespace SSHClient.Core
             if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1}KB";
             if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1}MB";
             return $"{bytes / (1024.0 * 1024 * 1024):F1}GB";
+        }
+
+        private static int CalculateTotalChunks(long fileSize)
+        {
+            var chunks = (fileSize + ChunkSize - 1) / ChunkSize;
+            if (chunks > int.MaxValue)
+                throw new InvalidOperationException("File is too large for the current upload protocol");
+            return (int)chunks;
+        }
+
+        private static string ToHex(byte[] hash)
+        {
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
     }
 
