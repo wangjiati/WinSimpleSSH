@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using Newtonsoft.Json;
 using WebSocketSharp;
@@ -29,64 +30,72 @@ namespace SSHClient.Core
             }
 
             var fileInfo = new FileInfo(localPath);
-            var fileData = File.ReadAllBytes(localPath);
-            var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
+            var totalChunks = CalculateTotalChunks(fileInfo.Length);
 
             var startMsg = new ProtocolMessage(MessageType.UploadStart,
                 JsonConvert.SerializeObject(new FileTransferStart
                 {
                     FileName = Path.GetFileName(localPath),
-                    FileSize = fileData.Length,
+                    FileSize = fileInfo.Length,
                     ChunkSize = ChunkSize,
                     TotalChunks = totalChunks,
                     RemotePath = remotePath ?? Path.GetFileName(localPath)
                 }));
             SendLocked(sendLock, ws, startMsg.ToJson());
 
-            // 暂存文件数据供 SendUploadChunks 使用
-            _pendingUploadData = fileData;
             _pendingUploadInfo = fileInfo;
             return true;
         }
 
-        [ThreadStatic]
-        private static byte[] _pendingUploadData;
         [ThreadStatic]
         private static FileInfo _pendingUploadInfo;
 
         /// <summary>发送所有数据块和完成消息（需在 SendUploadStart 成功且收到 UploadReady 后调用）</summary>
         public static void SendUploadChunks(object sendLock, WebSocket ws, string localPath)
         {
-            var fileData = _pendingUploadData;
             var fileInfo = _pendingUploadInfo;
-            if (fileData == null) return;
+            if (fileInfo == null) return;
 
-            var totalChunks = (int)Math.Ceiling((double)fileData.Length / ChunkSize);
-
-            for (int i = 0; i < totalChunks; i++)
+            using (var fs = new FileStream(localPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var sha = SHA256.Create())
             {
-                var offset = i * ChunkSize;
-                var length = Math.Min(ChunkSize, fileData.Length - offset);
-                var chunk = new byte[length];
-                Buffer.BlockCopy(fileData, offset, chunk, 0, length);
+                var totalChunks = CalculateTotalChunks(fs.Length);
+                var buffer = new byte[ChunkSize];
+                long transferred = 0;
 
-                var chunkMsg = new ProtocolMessage(MessageType.UploadChunk,
-                    JsonConvert.SerializeObject(new FileChunk
+                for (int i = 0; i < totalChunks; i++)
+                {
+                    var read = fs.Read(buffer, 0, buffer.Length);
+                    if (read <= 0)
+                        throw new EndOfStreamException($"Unexpected end of file while reading chunk {i}");
+
+                    sha.TransformBlock(buffer, 0, read, null, 0);
+
+                    var chunkMsg = new ProtocolMessage(MessageType.UploadChunk,
+                        JsonConvert.SerializeObject(new FileChunk
+                        {
+                            Index = i,
+                            Data = Convert.ToBase64String(buffer, 0, read)
+                        }));
+                    SendLocked(sendLock, ws, chunkMsg.ToJson());
+
+                    transferred += read;
+                    var progress = totalChunks == 0 ? 1.0 : (double)(i + 1) / totalChunks;
+                    DrawProgressBar(progress, fileInfo.Length, transferred);
+                }
+
+                sha.TransformFinalBlock(new byte[0], 0, 0);
+
+                var completeMsg = new ProtocolMessage(MessageType.UploadComplete,
+                    JsonConvert.SerializeObject(new FileTransferComplete
                     {
-                        Index = i,
-                        Data = Convert.ToBase64String(chunk)
+                        Success = true,
+                        Sha256 = ToHex(sha.Hash)
                     }));
-                SendLocked(sendLock, ws, chunkMsg.ToJson());
-
-                var progress = (double)(i + 1) / totalChunks;
-                DrawProgressBar(progress, fileInfo.Length, offset + length);
+                SendLocked(sendLock, ws, completeMsg.ToJson());
             }
 
-            var completeMsg = new ProtocolMessage(MessageType.UploadComplete, "");
-            SendLocked(sendLock, ws, completeMsg.ToJson());
-
             if (!Quiet) Console.Error.WriteLine();
-            _pendingUploadData = null;
             _pendingUploadInfo = null;
         }
 
@@ -111,11 +120,15 @@ namespace SSHClient.Core
             {
                 case MessageType.DownloadStart:
                     var info = JsonConvert.DeserializeObject<FileTransferStart>(msg.Data);
+                    state?.Dispose();
                     state = new DownloadState
                     {
                         Info = info,
                         LocalPath = localPath ?? info.FileName,
-                        BytesReceived = 0
+                        BytesReceived = 0,
+                        NextChunkIndex = 0,
+                        Stream = new FileStream(localPath ?? info.FileName, FileMode.Create, FileAccess.Write),
+                        Hash = SHA256.Create()
                     };
                     break;
 
@@ -123,21 +136,66 @@ namespace SSHClient.Core
                     if (state != null)
                     {
                         var chunk = JsonConvert.DeserializeObject<FileChunk>(msg.Data);
-                        var bytes = Convert.FromBase64String(chunk.Data);
-                        using (var fs = new FileStream(state.LocalPath, chunk.Index == 0 ? FileMode.Create : FileMode.Append))
+                        if (chunk?.Data == null)
                         {
-                            fs.Write(bytes, 0, bytes.Length);
+                            state.Error = "Invalid download chunk";
+                            state.Dispose();
+                            break;
                         }
-                        state.BytesReceived += bytes.Length;
 
-                        var progress = (double)(chunk.Index + 1) / state.Info.TotalChunks;
+                        if (chunk.Index != state.NextChunkIndex)
+                        {
+                            state.Error = $"Download chunk order mismatch: expected {state.NextChunkIndex}, got {chunk.Index}";
+                            state.Dispose();
+                            break;
+                        }
+
+                        var bytes = Convert.FromBase64String(chunk.Data);
+                        state.Stream.Write(bytes, 0, bytes.Length);
+                        state.Hash.TransformBlock(bytes, 0, bytes.Length, null, 0);
+                        state.BytesReceived += bytes.Length;
+                        state.NextChunkIndex++;
+
+                        var progress = state.Info.TotalChunks == 0 ? 1.0 : (double)(chunk.Index + 1) / state.Info.TotalChunks;
                         DrawProgressBar(progress, state.Info.FileSize, state.BytesReceived);
                     }
                     break;
 
                 case MessageType.DownloadComplete:
+                    if (state != null)
+                    {
+                        var complete = JsonConvert.DeserializeObject<FileTransferComplete>(msg.Data);
+                        FinishDownload(state, complete);
+                    }
                     if (!Quiet) Console.Error.WriteLine();
                     break;
+            }
+        }
+
+        private static void FinishDownload(DownloadState state, FileTransferComplete complete)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(state.Error))
+                    return;
+
+                if (state.BytesReceived != state.Info.FileSize)
+                    state.Error = $"Download size mismatch: expected {state.Info.FileSize}, got {state.BytesReceived}";
+                else if (state.NextChunkIndex != state.Info.TotalChunks)
+                    state.Error = $"Download chunk count mismatch: expected {state.Info.TotalChunks}, got {state.NextChunkIndex}";
+
+                state.Hash.TransformFinalBlock(new byte[0], 0, 0);
+                var expectedHash = !string.IsNullOrEmpty(complete?.Sha256) ? complete.Sha256 : state.Info.Sha256;
+                if (string.IsNullOrEmpty(state.Error) && !string.IsNullOrEmpty(expectedHash))
+                {
+                    var actualHash = ToHex(state.Hash.Hash);
+                    if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                        state.Error = $"Download hash mismatch: expected {expectedHash}, got {actualHash}";
+                }
+            }
+            finally
+            {
+                state.Dispose();
             }
         }
 
@@ -159,12 +217,50 @@ namespace SSHClient.Core
             if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1}MB";
             return $"{bytes / (1024.0 * 1024 * 1024):F1}GB";
         }
+
+        private static int CalculateTotalChunks(long fileSize)
+        {
+            var chunks = (fileSize + ChunkSize - 1) / ChunkSize;
+            if (chunks > int.MaxValue)
+                throw new InvalidOperationException("File is too large for the current upload protocol");
+            return (int)chunks;
+        }
+
+        private static string ToHex(byte[] hash)
+        {
+            var sb = new StringBuilder(hash.Length * 2);
+            foreach (var b in hash)
+                sb.Append(b.ToString("x2"));
+            return sb.ToString();
+        }
     }
 
-    public class DownloadState
+    public class DownloadState : IDisposable
     {
         public FileTransferStart Info { get; set; }
         public string LocalPath { get; set; }
         public long BytesReceived { get; set; }
+        public int NextChunkIndex { get; set; }
+        public string Error { get; set; }
+        public FileStream Stream { get; set; }
+        public SHA256 Hash { get; set; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Stream?.Close();
+                Stream?.Dispose();
+            }
+            catch { }
+            Stream = null;
+
+            try
+            {
+                Hash?.Dispose();
+            }
+            catch { }
+            Hash = null;
+        }
     }
 }

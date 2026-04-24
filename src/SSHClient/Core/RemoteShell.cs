@@ -152,6 +152,8 @@ namespace SSHClient.Core
                 case MessageType.Error:
                     var err = JsonConvert.DeserializeObject<ErrorData>(msg.Data);
                     Console.Error.WriteLine($"\nError: {err.Message} / 错误: {err.Message}");
+                    _onSignal?.Invoke($"TRANSFER_FAIL:{err.Message}");
+                    _onSignal?.Invoke("TRANSFER_DONE");
                     // 唤醒可能正在等待 UploadReady 的线程
                     lock (_uploadLock)
                     {
@@ -186,6 +188,8 @@ namespace SSHClient.Core
                     Console.Error.WriteLine(uploadResult.Success
                         ? $"\nUpload completed: {uploadResult.FileName} / 上传完成: {uploadResult.FileName}"
                         : $"\nUpload failed: {uploadResult.Message} / 上传失败: {uploadResult.Message}");
+                    if (!uploadResult.Success)
+                        _onSignal?.Invoke($"TRANSFER_FAIL:{uploadResult.Message}");
                     _onSignal?.Invoke("TRANSFER_DONE");
                     break;
 
@@ -225,19 +229,25 @@ namespace SSHClient.Core
             StopHeartbeat();
             try
             {
+                lock (_uploadLock)
+                {
+                    _uploadReady = false;
+                }
+
                 if (!FileTransfer.SendUploadStart(_sendLock, _ws, localPath, remotePath))
                     return;
 
                 // 等待服务端确认文件可写（UploadReady），最多等 10 秒
                 lock (_uploadLock)
                 {
-                    _uploadReady = false;
                     if (!_uploadReady)
                         System.Threading.Monitor.Wait(_uploadLock, 10000);
 
                     if (!_uploadReady)
                     {
                         Console.WriteLine("Upload rejected by server / 服务端拒绝上传");
+                        _onSignal?.Invoke("TRANSFER_FAIL:Upload rejected by server");
+                        _onSignal?.Invoke("TRANSFER_DONE");
                         return;
                     }
                 }

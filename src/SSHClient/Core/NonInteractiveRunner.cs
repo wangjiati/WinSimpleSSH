@@ -69,6 +69,7 @@ namespace SSHClient.Core
                 return FinishWithError(result, sw, "protocol_error", $"Local file not found: {localPath}");
 
             var shell = new RemoteShell();
+            string transferError = null;
             if (!TryConnectAndAuth(shell, result, sw, out int connErr, out ManualResetEvent transferDone, extraSignal: null))
                 return connErr;
 
@@ -76,11 +77,23 @@ namespace SSHClient.Core
 
             try
             {
+                shell.SetSignalHandler(signal =>
+                {
+                    if (signal == "TRANSFER_DONE")
+                        transferDone.Set();
+                    else if (signal.StartsWith("TRANSFER_FAIL:"))
+                        transferError = signal.Substring("TRANSFER_FAIL:".Length);
+                });
                 shell.Upload(localPath, remotePath);
                 if (!transferDone.WaitOne(ExecTimeoutMs))
                 {
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Upload completion signal not received");
+                }
+                if (!string.IsNullOrEmpty(transferError))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", transferError);
                 }
             }
             catch (Exception ex)
@@ -113,19 +126,29 @@ namespace SSHClient.Core
 
             var shell = new RemoteShell();
             DownloadState downloadState = null;
+            string transferError = null;
 
             // 下载需要额外拦截 MSG: 前缀的消息（DownloadStart/Chunk/Complete），
             // 转发给 FileTransfer.HandleDownloadMessage 去做文件写入
             Action<string> downloadSignal = signal =>
             {
+                if (signal.StartsWith("TRANSFER_FAIL:"))
+                {
+                    transferError = signal.Substring("TRANSFER_FAIL:".Length);
+                    return;
+                }
+
                 if (!signal.StartsWith("MSG:")) return;
                 try
                 {
                     var msg = ProtocolMessage.FromJson(signal.Substring(4));
                     FileTransfer.HandleDownloadMessage(msg, localPath, ref downloadState);
+                    if (msg.Type == MessageType.DownloadComplete && !string.IsNullOrEmpty(downloadState?.Error))
+                        transferError = downloadState.Error;
                 }
                 catch (Exception ex)
                 {
+                    transferError = ex.Message;
                     Console.Error.WriteLine($"Download parse error: {ex.Message}");
                 }
             };
@@ -142,6 +165,11 @@ namespace SSHClient.Core
                 {
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Download completion signal not received");
+                }
+                if (!string.IsNullOrEmpty(transferError))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", transferError);
                 }
             }
             catch (Exception ex)
