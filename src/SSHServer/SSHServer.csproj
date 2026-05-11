@@ -8,6 +8,10 @@
     <Version>1.6.0</Version>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Configuration.Install" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="WebSocketSharp" Version="1.0.3-rc9" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Costura.Fody" Version="5.7.0" PrivateAssets="All" />

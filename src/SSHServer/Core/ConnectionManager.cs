@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Timers;
+using Timer = System.Timers.Timer;
 using Newtonsoft.Json;
 using WebSocketSharp;
 using WebSocketSharp.Server;
@@ -285,6 +289,10 @@ namespace SSHServer.Core
                     if (RequireAuth()) HandleKickClient(msg.Data);
                     break;
 
+                case MessageType.UpdateRequest:
+                    if (RequireAuth()) HandleUpdateRequest(msg.Data);
+                    break;
+
                 default:
                     SendError($"Unknown message type: {msg.Type}");
                     break;
@@ -478,6 +486,84 @@ namespace SSHServer.Core
         {
             var req = JsonConvert.DeserializeObject<KickRequestData>(data);
             KickClient(req.ConnectionId, ID);
+        }
+
+        // ===== 远程更新 =====
+        private void HandleUpdateRequest(string data)
+        {
+            try
+            {
+                var req = JsonConvert.DeserializeObject<UpdateRequest>(data);
+                if (string.IsNullOrWhiteSpace(req.Source))
+                {
+                    SendUpdateResponse(false, "Source is required");
+                    return;
+                }
+
+                var exeDir = AppDomain.CurrentDomain.BaseDirectory;
+                var stagingDir = Path.Combine(exeDir, "update_staging");
+                Directory.CreateDirectory(stagingDir);
+                var stagingFile = Path.Combine(stagingDir, "SSHServer.exe");
+
+                SLog.Info($"[Update] {_session.Tag} requesting update from: {req.Source}");
+
+                // 下载/复制新版本
+                if (req.Source.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                    req.Source.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    using (var wc = new WebClient()) { wc.DownloadFile(req.Source, stagingFile); }
+                }
+                else
+                {
+                    File.Copy(req.Source, stagingFile, true);
+                }
+
+                var fi = new FileInfo(stagingFile);
+
+                // MD5 校验
+                if (!string.IsNullOrEmpty(req.Checksum))
+                {
+                    string md5;
+                    using (var stream = File.OpenRead(stagingFile))
+                    using (var md5Alg = MD5.Create())
+                    {
+                        md5 = BitConverter.ToString(md5Alg.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+                    }
+
+                    if (!md5.Equals(req.Checksum.Replace("-", "").ToLowerInvariant()))
+                    {
+                        File.Delete(stagingFile);
+                        SLog.Warn($"[Update] MD5 mismatch: expected={req.Checksum}, got={md5}");
+                        SendUpdateResponse(false, $"MD5 mismatch: expected={req.Checksum}, got={md5}");
+                        return;
+                    }
+                }
+
+                // 写更新标记
+                var markerPath = Path.Combine(exeDir, "update_marker");
+                File.WriteAllText(markerPath, DateTime.Now.ToString("o"));
+
+                SLog.Info($"[Update] Update staged ({fi.Length} bytes), restarting...");
+                SendUpdateResponse(true, $"Update staged ({fi.Length} bytes), server will restart");
+
+                // 延迟退出，确保响应发送出去
+                new Thread(() =>
+                {
+                    Thread.Sleep(1000);
+                    Process.GetCurrentProcess().Kill();
+                }) { IsBackground = true }.Start();
+            }
+            catch (Exception ex)
+            {
+                SLog.Error("[Update] Update failed", ex);
+                SendUpdateResponse(false, ex.Message);
+            }
+        }
+
+        private void SendUpdateResponse(bool success, string message)
+        {
+            _session.Send(new ProtocolMessage(MessageType.UpdateResponse,
+                JsonConvert.SerializeObject(new UpdateResponse { Success = success, Message = message })));
         }
 
         private void SendError(string message)

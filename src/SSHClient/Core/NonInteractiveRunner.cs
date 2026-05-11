@@ -187,6 +187,82 @@ namespace SSHClient.Core
             return ExitCodes.Success;
         }
 
+        /// <summary>远程更新：发送 UpdateRequest，等待 UpdateResponse。</summary>
+        public int RunUpdate(string positional)
+        {
+            // 解析: --source <url> [--checksum <md5>]
+            string source = null;
+            string checksum = null;
+
+            var parts = positional.Split(new[] { ' ' }, 2);
+            var tokens = new List<string>();
+            bool inQuotes = false;
+            var current = "";
+            foreach (var ch in positional)
+            {
+                if (ch == '"') inQuotes = !inQuotes;
+                else if ((ch == ' ' || ch == '\t') && !inQuotes)
+                {
+                    if (current.Length > 0) { tokens.Add(current); current = ""; }
+                }
+                else current += ch;
+            }
+            if (current.Length > 0) tokens.Add(current);
+
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                if (tokens[i] == "--source" && i + 1 < tokens.Count) source = tokens[++i];
+                else if (tokens[i] == "--checksum" && i + 1 < tokens.Count) checksum = tokens[++i];
+            }
+
+            if (string.IsNullOrEmpty(source))
+            {
+                Console.Error.WriteLine("Usage: SSHC update <host> -u <user> -p <pwd> --source <url_or_path> [--checksum <md5>]");
+                return ExitCodes.ProtocolError;
+            }
+
+            var sw = Stopwatch.StartNew();
+            var result = new CommandResult { Command = $"update --source {source}" };
+            var shell = new RemoteShell();
+
+            bool updateSuccess = false;
+
+            if (!TryConnectAndAuth(shell, result, sw, out int connErr, out ManualResetEvent transferDone,
+                extraSignal: signal =>
+                {
+                    if (signal.StartsWith("UPDATE_DONE:"))
+                    {
+                        updateSuccess = signal.Substring("UPDATE_DONE:".Length).StartsWith("True");
+                    }
+                }))
+                return connErr;
+
+            try
+            {
+                var req = new UpdateRequest { Source = source, Checksum = checksum };
+                shell.SendRaw(new ProtocolMessage(MessageType.UpdateRequest, JsonConvert.SerializeObject(req)).ToJson());
+
+                if (!transferDone.WaitOne(ExecTimeoutMs))
+                {
+                    TryDisconnect(shell);
+                    return FinishWithError(result, sw, "protocol_error", "Update response not received");
+                }
+            }
+            catch (Exception ex)
+            {
+                TryDisconnect(shell);
+                return FinishWithError(result, sw, "protocol_error", $"Update failed: {ex.Message}");
+            }
+
+            TryDisconnect(shell);
+
+            result.Ok = updateSuccess;
+            result.ExitCode = updateSuccess ? 0 : (int?)ExitCodes.UpdateFailed;
+            result.DurationMs = sw.ElapsedMilliseconds;
+            EmitResult(result);
+            return result.ExitCode ?? ExitCodes.UpdateFailed;
+        }
+
         /// <summary>
         /// 共享的连接 + 认证流程：注册 signal handler（含可选的额外 handler）、Connect、等认证结果。
         /// </summary>

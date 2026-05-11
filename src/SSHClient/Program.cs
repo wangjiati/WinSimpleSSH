@@ -27,6 +27,7 @@ namespace SSHClient
                 case "start":
                 case "upload":
                 case "download":
+                case "update":
                     return RunNonInteractive(verb, args);
                 case "help":
                 case "-h":
@@ -280,6 +281,8 @@ namespace SSHClient
                         return runner.RunUpload(first, second);
                     else
                         return runner.RunDownload(first, second);
+                case "update":
+                    return runner.RunUpdate(opts.Positional);
                 default:
                     return ExitCodes.ProtocolError;
             }
@@ -556,6 +559,7 @@ namespace SSHClient
             Console.WriteLine("  SSHC.exe start    <host> -u <user> -p <pwd> [opts] \"<program>\"");
             Console.WriteLine("  SSHC.exe upload   <host> -u <user> -p <pwd> [opts] <local> <remote>");
             Console.WriteLine("  SSHC.exe download <host> -u <user> -p <pwd> [opts] <remote> <local>");
+            Console.WriteLine("  SSHC.exe update   <host> -u <user> -p <pwd> --source <url_or_path> [--checksum <md5>]");
             Console.WriteLine();
             Console.WriteLine("=== Options / 选项 ===");
             Console.WriteLine("  --port <port>  Server port (default: 22222) / 服务端端口（默认: 22222）");

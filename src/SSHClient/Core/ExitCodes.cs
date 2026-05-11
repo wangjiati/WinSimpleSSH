@@ -11,6 +11,7 @@ namespace SSHClient.Core
         public const int ProtocolError    = 253;  // 标记丢失 / 协议异常 / 参数错误
         public const int AuthFailed       = 254;  // 用户名或密码错误
         public const int ConnectionFailed = 255;  // 连不上目标 / 握手超时
+        public const int UpdateFailed     = 256;  // 远程更新失败
         // 其他退出码 = 远程命令的 %ERRORLEVEL% 透传
     }
 }

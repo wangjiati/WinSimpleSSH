@@ -90,6 +90,12 @@ namespace SSHClient.Core
             _onShellOutput = handler;
         }
 
+        /// <summary>发送原始协议 JSON（用于非标准消息如 UpdateRequest）</summary>
+        public void SendRaw(string json)
+        {
+            SafeSend(json);
+        }
+
         /// <summary>启动心跳，每30秒发送 Ping</summary>
         public void StartHeartbeat()
         {
@@ -203,9 +209,16 @@ namespace SSHClient.Core
                     break;
 
                 case MessageType.DownloadComplete:
-                    // 先分发给交互模式的下载处理器（写完最后一个块、打印换行），
-                    // 再触发 TRANSFER_DONE 让非交互 Runner 知道可以退出了
                     _onSignal?.Invoke($"MSG:{raw}");
+                    _onSignal?.Invoke("TRANSFER_DONE");
+                    break;
+
+                case MessageType.UpdateResponse:
+                    var updateResp = JsonConvert.DeserializeObject<UpdateResponse>(msg.Data);
+                    Console.Error.WriteLine(updateResp.Success
+                        ? $"Update accepted: {updateResp.Message}"
+                        : $"Update failed: {updateResp.Message}");
+                    _onSignal?.Invoke($"UPDATE_DONE:{updateResp.Success}");
                     _onSignal?.Invoke("TRANSFER_DONE");
                     break;
 

@@ -1,10 +1,10 @@
 using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Principal;
+using System.ServiceProcess;
 using System.Threading;
-using System.Threading.Tasks;
 using SSHServer.Core;
+using SSHServer.Service;
 
 namespace SSHServer
 {
@@ -37,9 +37,6 @@ namespace SSHServer
         const uint ENABLE_QUICK_EDIT_MODE = 0x0040;
         const uint ENABLE_INSERT_MODE = 0x0020;
 
-        /// <summary>
-        /// 禁用控制台快速编辑模式（鼠标选中会暂停所有输出）和插入模式。
-        /// </summary>
         static void DisableQuickEditMode()
         {
             var handle = GetStdHandle(STD_INPUT_HANDLE);
@@ -54,7 +51,61 @@ namespace SSHServer
 
         static void Main(string[] args)
         {
-            // 检查是否显示控制台窗口
+            // 1. 服务安装/卸载
+            if (HasArg(args, "--install"))
+            {
+                ServiceHelper.Install();
+                return;
+            }
+            if (HasArg(args, "--uninstall"))
+            {
+                ServiceHelper.Uninstall();
+                return;
+            }
+
+            // 2. 服务守护模式（SCM 启动，非交互式）
+            if (!Environment.UserInteractive)
+            {
+                ServiceBase.Run(new SSHServiceHost());
+                return;
+            }
+
+            // 3. 由服务守护进程启动的 WebSocket 服务器模式
+            if (HasArg(args, "--service-server"))
+            {
+                RunServer();
+                return;
+            }
+
+            // 4. 控制台/后台模式（现有行为）
+            RunConsole(args);
+        }
+
+        /// <summary>
+        /// service-server 模式：运行 WebSocket 服务器，由服务守护进程监控。
+        /// </summary>
+        static void RunServer()
+        {
+            try
+            {
+                _engine = new WebSocketServerEngine();
+                _engine.Start();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: " + ex.Message);
+                return;
+            }
+
+            // 等待退出信号
+            _quitEvent.WaitOne();
+        }
+
+        /// <summary>
+        /// 控制台/后台模式：现有行为。
+        /// </summary>
+        static void RunConsole(string[] args)
+        {
             bool showConsole = false;
             foreach (var arg in args)
             {
@@ -89,18 +140,16 @@ namespace SSHServer
             Console.CancelKeyPress += (s, e) =>
             {
                 e.Cancel = true;
-                SLog.Info("服务器正在关闭 (Ctrl+C) / Server shutting down (Ctrl+C)");
+                SLog.Info("Server shutting down (Ctrl+C)");
                 _engine.Stop();
                 _quitEvent.Set();
             };
 
-            // 捕获窗口关闭（点 X 按钮）、系统关机、用户注销等事件
             _ctrlHandler = (ctrlType) =>
             {
-                // CTRL_CLOSE_EVENT = 2, CTRL_LOGOFF_EVENT = 5, CTRL_SHUTDOWN_EVENT = 6
                 if (ctrlType == 2 || ctrlType == 5 || ctrlType == 6)
                 {
-                    SLog.Info($"服务器正在关闭 (事件={ctrlType}) / Server shutting down (event={ctrlType})");
+                    SLog.Info($"Server shutting down (event={ctrlType})");
                     _engine.Stop();
                 }
                 return false;
@@ -108,9 +157,14 @@ namespace SSHServer
             SetConsoleCtrlHandler(_ctrlHandler, true);
 
             PrintHelp();
-
-            // 主线程等待退出信号，不接受控制台输入
             _quitEvent.WaitOne();
+        }
+
+        static bool HasArg(string[] args, string name)
+        {
+            foreach (var arg in args)
+                if (arg.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
 
         static void PrintHelp()
@@ -119,11 +173,12 @@ namespace SSHServer
             Console.WriteLine();
             Console.WriteLine($"SSH Server v{version}");
             Console.WriteLine();
-            Console.WriteLine("=== 帮助 / Help ===");
+            Console.WriteLine("=== Help ===");
             Console.WriteLine();
-            Console.WriteLine("  关闭窗口即可停止服务器");
-            Console.WriteLine("  Close the window to stop the server");
-            Console.WriteLine("  Ctrl+C  停止服务器并退出 / Stop server and exit");
+            Console.WriteLine("  --install    Install as Windows service");
+            Console.WriteLine("  --uninstall  Uninstall Windows service");
+            Console.WriteLine("  --console    Show console window");
+            Console.WriteLine("  Ctrl+C       Stop server and exit");
             Console.WriteLine();
         }
     }

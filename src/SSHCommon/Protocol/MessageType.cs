@@ -38,6 +38,10 @@ namespace SSHCommon.Protocol
         KickClient,
         Kicked,
 
+        // 远程更新
+        UpdateRequest,
+        UpdateResponse,
+
         // 通用
         Error,
         Disconnect
