@@ -19,6 +19,7 @@
 - [客户端](#客户端)
   - [交互模式 connect](#交互模式-connect)
   - [非交互模式 Agent--脚本调用](#非交互模式-agent--脚本调用)
+- [远程更新](#远程更新)
 - [连接管理](#连接管理)
   - [多客户端连接](#多客户端连接)
   - [超时断开](#超时断开)
@@ -41,7 +42,7 @@ WinSimpleSSH 客户端 `SSHC.exe` 同时支持两种使用方式，由第一个�
 | **交互模式** | `SSHC connect <host> -u <user>` | 人类操作员、临时调试、运维 | `ssh>` REPL，cmd.exe 默认 GBK，带进度条/历史命令/Ctrl+C 中断 |
 | **非交互模式** | `SSHC <verb> <host> -u <user> -p <pwd> ...` | 脚本、CI、AI Agent 调用 | UTF-8 stdout、JSON 可选、退出码精确分类、banner 全走 stderr |
 
-非交互模式有 4 个动词：`exec` / `start` / `upload` / `download`。每次调用 = 完整的 connect → auth → execute → disconnect 生命周期，**无状态、可并行**。
+非交互模式有 5 个动词：`exec` / `start` / `upload` / `download` / `update`。每次调用 = 完整的 connect → auth → execute → disconnect 生命周期，**无状态、可并行**。
 
 服务端 `SSHServer.exe` **不区分模式**——同一个服务端能同时接受两种客户端连接，新老客户端混用没有问题。
 
@@ -61,6 +62,8 @@ WinSimpleSSH 客户端 `SSHC.exe` 同时支持两种使用方式，由第一个�
 - **日志系统** — 服务端自动记录操作日志（含启动/退出）到 exe 同级 `log/` 目录
 - **IP 白名单** — server.json 配置允许连接的 IP，支持精确匹配和通配符（`192.168.1.*`）
 - **报文混淆** — 固定置换表 + 随机偏移，WebSocket 二进制帧传输，抓包不可直接读取原文
+- **Windows 服务** — `--install` 安装为系统服务，开机自启，桌面穿透支持 GUI 应用
+- **远程更新** — `SSHC update` 远程推送新版本，服务端自动下载替换重启
 - **广泛兼容** — 支持 Windows 7 / 10 / 11，基于 .NET Framework 4.5.2
 
 ### 交互模式
@@ -74,7 +77,7 @@ WinSimpleSSH 客户端 `SSHC.exe` 同时支持两种使用方式，由第一个�
 
 ### 非交互模式（Agent 友好）
 
-- **4 个动词** — `exec` 执行命令 / `start` fire-and-forget 启动程序 / `upload` 上传文件 / `download` 下载文件
+- **5 个动词** — `exec` 执行命令 / `start` fire-and-forget 启动程序 / `upload` 上传文件 / `download` 下载文件 / `update` 远程更新
 - **JSON 输出** — `--json` 选项输出结构化结果，Agent 可直接 `json.loads`
 - **退出码规范** — 仿 OpenSSH：`0` / `130` / `253` / `254` / `255` + 透传远程 `%ERRORLEVEL%`
 - **UTF-8 stdout** — 中文不乱码，可被任意脚本/Agent 直接消费
@@ -169,11 +172,13 @@ SSHC/
 
 ### 启动
 
-服务端支持两种运行模式：
+服务端支持三种运行模式：
 
 ```bash
 SSHServer.exe              # 静默模式（默认）：无控制台窗口，后台运行
 SSHServer.exe --console    # 控制台模式：显示窗口，用于调试和监控
+SSHServer.exe --install    # 安装为 Windows 服务（开机自启，需管理员权限）
+SSHServer.exe --uninstall  # 卸载 Windows 服务（需管理员权限）
 ```
 
 也可通过 `StartAdmin.bat` 以管理员权限启动（自动附加 `--console` 参数，显示窗口）。
@@ -189,6 +194,14 @@ SSHServer.exe --console    # 控制台模式：显示窗口，用于调试和监
 - 已禁用快速编辑模式（鼠标选中不会卡住输出）
 - **Ctrl+C** 或关闭窗口即可停止，退出时记录日志
 - 适合调试、临时监控
+
+**服务模式（`--install`）：**
+- 安装为 Windows 服务，账户 LocalSystem，开机自动启动
+- 服务守护进程运行在 Session 0，通过 `CreateProcessAsUser` 在用户桌面 Session 启动 WebSocket 服务器
+- 远程命令可启动 GUI 应用（如 notepad.exe），窗口在用户桌面可见
+- 每 5 秒监控服务器进程，崩溃自动重启
+- 支持远程更新：客户端发送 `update` 命令，服务端下载新版后守护进程自动替换 EXE 并重启
+- 卸载：`SSHServer.exe --uninstall`
 
 **通用：**
 - 首次启动自动生成默认 `server.json` 配置文件（含默认白名单和用户）
@@ -239,6 +252,7 @@ SSHC.exe exec     <host> -u <user> -p <pwd> "<命令>"
 SSHC.exe start    <host> -u <user> -p <pwd> "<程序>"
 SSHC.exe upload   <host> -u <user> -p <pwd> <local> <remote>
 SSHC.exe download <host> -u <user> -p <pwd> <remote> <local>
+SSHC.exe update   <host> -u <user> -p <pwd> --source <url_or_path> [--checksum <md5>]
 SSHC.exe --version                                  # 显示版本号
 SSHC.exe help                                       # 显示用法
 ```
@@ -318,6 +332,33 @@ ssh> download "D:\logs\app.log" "app.log"
 
 ---
 
+### 远程更新
+
+通过 `update` 动词远程推送新版本到服务端，无需登录远程机器操作。
+
+```bash
+# 从 HTTP 服务器更新
+SSHC.exe update 192.168.1.100 -u admin -p admin123 --source http://myserver/SSHServer.exe
+
+# 从网络共享更新，带 MD5 校验
+SSHC.exe update 192.168.1.100 -u admin -p admin123 --source \\share\updates\SSHServer.exe --checksum abc123def456
+
+# 从本地路径更新（同一台机器上）
+SSHC.exe update 127.0.0.1 -u admin -p admin123 --source C:\temp\SSHServer.exe
+```
+
+**更新流程：**
+1. 客户端发送 `UpdateRequest`（含来源路径和可选 MD5）
+2. 服务端下载/复制新版本到 `update_staging/` 临时目录
+3. 如果提供了 `--checksum`，服务端校验 MD5
+4. 服务端写入 `update_marker` 标记文件
+5. 服务端返回 `UpdateResponse` 并自动退出
+6. 服务守护进程检测到标记后替换 EXE 并重启（服务模式下）
+
+> 非服务模式下（控制台/后台模式），更新文件下载到 staging 后需要手动重启 SSHServer.exe。
+
+---
+
 ### 非交互模式 (Agent / 脚本调用)
 
 不进入 REPL，一次性执行单个动作并退出。专为脚本、CI、AI Agent 设计。
@@ -361,6 +402,7 @@ SSHC.exe download <主机> -u <用户> -p <密码> [选项] <远程文件> <本�
 | `start` | 启动远程 GUI/服务程序后立即返回（fire-and-forget，封装 `start ""` 语法） | 5 秒内拿到结束标记或 cmd.exe 确认收到命令即返回 0 |
 | `upload` | 上传本地文件到远端，等待服务端确认 | 0 = 成功，非 0 = 错误 |
 | `download` | 从远端下载文件到本地，等待传输完成 | 0 = 成功，非 0 = 错误 |
+| `update` | 远程更新服务端，指定新版本 URL 或路径 | 0 = 成功，256 = 更新失败 |
 
 #### 退出码规范（仿 OpenSSH）
 
@@ -371,6 +413,7 @@ SSHC.exe download <主机> -u <用户> -p <密码> [选项] <远程文件> <本�
 | `253` | 协议错误 / 参数错误 / 标记丢失 |
 | `254` | 认证失败（用户名或密码错误） |
 | `255` | 连接失败（服务端不可达 / 握手超时） |
+| `256` | 远程更新失败 |
 | 其他 | 远程命令的 `%ERRORLEVEL%` 透传 |
 
 #### 输出分流和编码
@@ -396,6 +439,12 @@ SSHC.exe upload 192.168.1.100 -u admin -p admin123 "C:\patches\update.zip" "C:\a
 
 # 4. 下载日志
 SSHC.exe download 192.168.1.100 -u admin -p admin123 "C:\app\logs\error.log" "C:\local\error.log"
+
+# 5. 远程更新（从 HTTP 服务器下载新版）
+SSHC.exe update 192.168.1.100 -u admin -p admin123 --source http://myserver/SSHServer.exe
+
+# 6. 远程更新（从网络共享，带 MD5 校验）
+SSHC.exe update 192.168.1.100 -u admin -p admin123 --source \\share\updates\SSHServer.exe --checksum abc123def456
 ```
 
 #### JSON 输出 schema
@@ -606,6 +655,9 @@ Wireshark 抓包仅显示不可读的 hex dump。详见 `docs/features/obfuscati
 | **通用** | | |
 | `Error` | S → C | 错误消息 |
 | `Disconnect` | 双向 | 断开连接 |
+| **远程更新** | | |
+| `UpdateRequest` | C → S | 更新请求，data 含 source（URL/路径）和 checksum（可选 MD5） |
+| `UpdateResponse` | S → C | 更新结果，data 含 success/message/fileSize |
 
 ### 通信流程示例
 
@@ -733,18 +785,23 @@ WinSimpleSSH/
     │   │   └── Obfuscator.cs           #   报文混淆器（置换表 + 随机偏移）
     │   └── Protocol/
     │       ├── MessageType.cs          #   消息类型枚举
-    │       └── ProtocolMessage.cs      #   JSON 协议模型
+    │       ├── ProtocolMessage.cs      #   JSON 协议模型
+    │       └── UpdateModels.cs         #   远程更新请求/响应模型
     │
     ├── SSHServer/                      # 服务端
     │   ├── SSHServer.csproj
-    │   ├── Program.cs                  #   入口（仅显示日志，不接受输入）
+    │   ├── Program.cs                  #   入口（多模式分发：服务/控制台/后台）
     │   ├── WebSocketServerEngine.cs    #   WebSocket 服务引擎
     │   ├── server.json                 #   配置文件
     │   ├── Config/
     │   │   └── ServerConfig.cs         #   配置模型与加载
+    │   ├── Service/                    #   Windows 服务模式
+    │   │   ├── SSHServiceHost.cs       #   ServiceBase 子类，监控+更新
+    │   │   ├── ProcessLauncher.cs      #   P/Invoke 桌面穿透，CreateProcessAsUser
+    │   │   └── ServiceHelper.cs        #   安装/卸载服务
     │   └── Core/
     │       ├── ClientSession.cs        #   客户端会话数据模型
-    │       ├── ConnectionManager.cs    #   多连接管理、认证、超时检测
+    │       ├── ConnectionManager.cs    #   多连接管理、认证、超时、远程更新
     │       ├── ShellSession.cs         #   cmd.exe 进程管理
     │       ├── FileTransferHandler.cs  #   文件传输处理
     │       └── Logger.cs               #   日志系统（控制台+文件）
@@ -775,6 +832,23 @@ WinSimpleSSH/
 ---
 
 ## 更新日志
+
+### v1.7.0 (2026-05-10)
+
+**Windows 服务模式：**
+- 单 EXE 多模式：`SSHServer.exe --install` 安装为 Windows 服务（LocalSystem 账户，开机自启）
+- 服务守护进程通过 `CreateProcessAsUser` 桌面穿透，在用户 Session 中启动 WebSocket 服务器，支持远程启动 GUI 应用（如 notepad.exe）
+- 每 5 秒监控子进程，崩溃自动重启；配置 `sc failure` 故障恢复策略（5s/10s/30s 重启）
+- `--uninstall` 停止并卸载服务；`--console` 和默认后台模式保持不变
+
+**远程更新：**
+- 新增 `update` 动词：`SSHC update <host> -u <user> -p <pwd> --source <url_or_path> [--checksum <md5>]`
+- 服务端从 HTTP/HTTPS URL 或网络共享路径下载新版本，支持 MD5 校验
+- 更新流程：下载到 staging 目录 → 写标记 → 退出 → 服务守护进程自动替换 EXE 并重启
+- 无需本地配置文件，更新信息全部通过远程命令参数传入
+
+**集成测试：**
+- 新增端到端集成测试脚本 `tests/integration-test.sh`，覆盖 exec、upload、download、update 全流程
 
 ### v1.6.0 (2026-04-24)
 
