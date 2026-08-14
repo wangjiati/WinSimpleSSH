@@ -364,3 +364,8 @@ MigrationBackup/
 FodyWeavers.xsd
 
 .claude/
+
+# 用户反馈样本（含真实凭据，永不入库；样本统一放在仓库外的
+# D:\0_projects\WinSimpleSSH-用户反馈\ 目录管理）
+tests/用户反馈/
+.solomd/

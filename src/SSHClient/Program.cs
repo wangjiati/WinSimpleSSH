@@ -246,8 +246,23 @@ namespace SSHClient
         {
             // 非交互模式统一使用 UTF-8 输出，让 Agent 按 UTF-8 解析 stdout 不会乱码。
             // 交互模式不受影响（保留用户 cmd.exe 的默认编码，避免破坏终端中文显示）。
-            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
+            //
+            // 切 UTF-8 底层是 SetConsoleOutputCP(65001)，改动的是与父 cmd.exe 共享的控制台
+            // 代码页且进程退出后仍生效；父 cmd 按读取每一行时的代码页解码批处理内容。
+            // 必须在退出前恢复原值，否则同窗口 .bat 的后续行中文参数会按错误编码解码（乱码）。
+            ConsoleEncodingScope.Enter();
+            try
+            {
+                return RunNonInteractiveCore(verb, args);
+            }
+            finally
+            {
+                ConsoleEncodingScope.Restore();
+            }
+        }
 
+        static int RunNonInteractiveCore(string verb, string[] args)
+        {
             var opts = ParseCommonArgs(verb, args);
             if (opts == null) return ExitCodes.ProtocolError;
 

@@ -73,7 +73,12 @@ Output: `src/SSHServer/bin/Debug/net452/SSHServer.exe` and `src/SSHClient/bin/De
 - 保留 cmd.exe 默认 GBK 输出，避免破坏老用户终端
 
 **非交互模式（Agent 友好）：**
-- stdout 强制 UTF-8 编码（Console.OutputEncoding = UTF8）
+- stdout 强制 UTF-8 编码（Console.OutputEncoding = UTF8），**退出前恢复原控制台代码页**（ConsoleEncodingScope）。
+  设置 OutputEncoding 底层是 SetConsoleOutputCP(65001)，改动与父 cmd.exe 共享的控制台且退出后持续生效；
+  父 cmd 按读取每行时的代码页解码 bat，不恢复会导致同窗口 .bat 后续行中文参数乱码。
+  看门狗 Environment.Exit 路径由 AppDomain.ProcessExit 兜底恢复；
+  TerminateProcess(taskkill /F)/FailFast/栈溢出等硬终止无法恢复，属已知局限。
+  批处理调用建议：bat 存为 ANSI/GBK 直接可用；UTF-8 编码的 bat 需首行 `chcp 65001`（恢复逻辑保存的是启动时代码页，不会破坏它）。回归测试：tests/15-encoding-restore.bat（无需 server）
 - Banner / 横幅 / 错误提示走 stderr，stdout 永远只含命令输出或 JSON
 - 退出码精确分类：0 成功 / 130 中断 / 253 协议错误 / 254 认证 / 255 连接 / 其他透传 %ERRORLEVEL%
 - 每次调用 = 完整 connect → auth → execute → disconnect 生命周期，无状态
