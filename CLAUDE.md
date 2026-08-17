@@ -25,10 +25,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build
 
 ```
-"C:/Users/Administrator/.dotnet/dotnet.exe" build WinSimpleSSH.sln
+"C:/Program Files/dotnet/dotnet.exe" build WinSimpleSSH.sln
 ```
 
-> 本机 `C:\Program Files\dotnet\` 只有 .NET 8 运行时，没有 SDK。用户级 .NET 10 SDK 在 `C:\Users\Administrator\.dotnet\sdk\10.0.201\`。或在 Rider 里直接 Build Solution。
+> 本机 `C:\Program Files\dotnet\` 已装 SDK（10.0.111 / 9.0.306 / 8.0.403）。或在 Rider 里直接 Build Solution。
 
 Output: `src/SSHServer/bin/Debug/net452/SSHServer.exe` and `src/SSHClient/bin/Debug/net452/SSHC.exe`
 
