@@ -179,6 +179,7 @@ SSHServer.exe              # 静默模式（默认）：无控制台窗口，后
 SSHServer.exe --console    # 控制台模式：显示窗口，用于调试和监控
 SSHServer.exe --install    # 安装为 Windows 服务（开机自启，需管理员权限）
 SSHServer.exe --uninstall  # 卸载 Windows 服务（需管理员权限）
+SSHServer.exe help         # 显示帮助（也支持 -h / --help / -? / /?）
 ```
 
 也可通过 `StartAdmin.bat` 以管理员权限启动（自动附加 `--console` 参数，显示窗口）。

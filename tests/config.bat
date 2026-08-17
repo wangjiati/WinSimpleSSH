@@ -9,6 +9,7 @@ set PASS=admin123
 set PORT=22222
 
 set SSHC=%~dp0..\src\SSHClient\bin\Debug\net452\SSHC.exe
+set SSHSRV=%~dp0..\src\SSHServer\bin\Debug\net452\SSHServer.exe
 
 if not exist "%SSHC%" (
     echo [ERROR] SSHC.exe not found: %SSHC%
