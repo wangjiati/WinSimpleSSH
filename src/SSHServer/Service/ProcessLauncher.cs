@@ -108,7 +108,8 @@ namespace SSHServer.Service
             IntPtr procAttributes, IntPtr threadAttributes, bool inheritHandles, uint creationFlags,
             IntPtr environment, string currentDirectory, ref STARTUPINFO startupInfo, out PROCESS_INFORMATION processInfo);
 
-        [DllImport("wtsapi32.dll", SetLastError = true)]
+        // WTSGetActiveConsoleSessionId 由 kernel32.dll 导出（Vista+），wtsapi32.dll 中不存在
+        [DllImport("kernel32.dll", SetLastError = true)]
         static extern int WTSGetActiveConsoleSessionId();
 
         [DllImport("wtsapi32.dll", SetLastError = true)]
