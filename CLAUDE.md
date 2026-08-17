@@ -92,4 +92,4 @@ Output: `src/SSHServer/bin/Debug/net452/SSHServer.exe` and `src/SSHClient/bin/De
 
 ## Requirements Doc
 
-完整需求见 `头脑风暴.txt`，非交互 CLI 设计过程见 `docs/features/non-interactive-cli/`
+完整需求见 `docs/头脑风暴.txt`，非交互 CLI 设计过程见 `docs/features/non-interactive-cli/`

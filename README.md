@@ -763,10 +763,10 @@ WinSimpleSSH/
 ├── WinSimpleSSH.sln                    # 解决方案文件
 ├── README.md
 ├── CLAUDE.md                           # AI 协作说明
-├── 头脑风暴.txt                          # 原始需求文档
 │
 ├── docs/                               # 设计文档
 │   ├── README.md                       # 文档索引
+│   ├── 头脑风暴.txt                     # 原始需求文档
 │   ├── security-audit.md               # 安全审计报告
 │   └── features/
 │       ├── obfuscation.md              # 报文混淆方案设计
