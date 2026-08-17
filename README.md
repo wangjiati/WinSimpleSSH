@@ -833,6 +833,16 @@ WinSimpleSSH/
 
 ## 更新日志
 
+### v1.7.2 (2026-08-17)
+
+**服务模式启动修复：**
+- 修复 Windows 服务模式下守护循环拉起工作进程失败的问题：`WTSGetActiveConsoleSessionId` 的 P/Invoke 错误声明在 `wtsapi32.dll`，该 DLL 并不导出此函数，所有 Windows 版本均抛 `EntryPointNotFoundException`（服务端日志反复出现 "Failed to launch: 无法在 DLL"wtsapi32.dll"中找到名为"WTSGetActiveConsoleSessionId"的入口点"）
+- 该 API 自 Vista 起由 `kernel32.dll` 导出，已修正 DllImport 宿主
+- 仅影响 v1.7.0 引入的服务模式；控制台 / 后台模式不受影响
+
+**升级说明：**
+- 仅需替换现场的 `SSHServer.exe`，`SSHC.exe` 无改动
+
 ### v1.7.1 (2026-08-14)
 
 **批处理中文乱码修复：**
