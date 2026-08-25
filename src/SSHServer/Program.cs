@@ -34,6 +34,27 @@ namespace SSHServer
         [DllImport("kernel32.dll")]
         static extern IntPtr GetStdHandle(int nStdHandle);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool SetStdHandle(int nStdHandle, IntPtr hHandle);
+
+        [DllImport("kernel32.dll")]
+        static extern uint GetFileType(IntPtr hFile);
+
+        const uint FILE_TYPE_CHAR = 0x0002;
+
+        [DllImport("kernel32.dll")]
+        static extern IntPtr GetConsoleWindow();
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern IntPtr CreateFileW(string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+            IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+        const uint GENERIC_READ = 0x80000000;
+        const uint GENERIC_WRITE = 0x40000000;
+        const uint FILE_SHARE_READ = 0x00000001;
+        const uint FILE_SHARE_WRITE = 0x00000002;
+        const uint OPEN_EXISTING = 3;
+
         [DllImport("kernel32.dll")]
         static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
@@ -208,6 +229,7 @@ namespace SSHServer
             {
                 allocated = EnsureConsoleAttached();
                 ConfigureRedirectedOutput();
+                HelpTrace($"printing usage, allocated={allocated}, redirected={Console.IsOutputRedirected}");
                 PrintUsage();
                 if (allocated)
                 {
@@ -215,10 +237,28 @@ namespace SSHServer
                     Console.WriteLine("Press any key to exit / 按任意键退出...");
                     try { Console.ReadKey(true); } catch { }
                 }
+                HelpTrace("usage printed");
             }
-            catch
+            catch (Exception ex)
             {
-                // 无控制台可用（如 Session 0 服务上下文）：静默退出
+                HelpTrace("direct write failed: " + ex.Message);
+                // Win7（csrss 控制台架构）：GUI 进程继承的控制台句柄未附着不可写，
+                // 抛 IOException。附着父控制台（cmd 场景即命令行所在控制台）后重试。
+                try
+                {
+                    if (AttachParentConsole())
+                    {
+                        ConfigureRedirectedOutput();
+                        PrintUsage();
+                        HelpTrace("retry after AttachConsole: usage printed");
+                        return;
+                    }
+                    HelpTrace("AttachConsole unavailable, giving up");
+                }
+                catch (Exception ex2)
+                {
+                    HelpTrace("retry failed: " + ex2);
+                }
             }
         }
 
@@ -228,18 +268,64 @@ namespace SSHServer
         static bool EnsureConsoleAttached()
         {
             var h = GetStdHandle(STD_OUTPUT_HANDLE);
+            var ft = (h != IntPtr.Zero && h != (IntPtr)(-1)) ? GetFileType(h) : 0;
+            var wnd = GetConsoleWindow();
+            HelpTrace($"stdout handle=0x{h.ToString("X")}, filetype=0x{ft:X}, consoleWnd=0x{wnd.ToString("X")}");
             if (h != IntPtr.Zero && h != (IntPtr)(-1))
-                return false; // 已有可用输出（cmd / bash / 重定向管道）
-
-            if (AttachConsole(ATTACH_PARENT_PROCESS))
             {
-                ResetConsoleWriters(); // 附着父控制台（PowerShell 等）
-                return false;
+                if ((ft == FILE_TYPE_CHAR || ft == 0) && wnd == IntPtr.Zero)
+                {
+                    // 继承了控制台句柄但本进程未附着任何控制台。
+                    // Win7（csrss 架构）下 .NET 会把这种句柄误判为重定向，
+                    // OpenStandardOutput 返回空流，WriteLine 静默丢弃、不抛异常；
+                    // 此时 GetFileType 也返回 FILE_TYPE_UNKNOWN(0)。Win8+（ConDrv
+                    // 架构）返回 FILE_TYPE_CHAR 且可直接写。统一附着父控制台
+                    // （cmd 场景即命令行所在控制台），附着后 CONOUT$ 必定可写，
+                    // 两代架构都正确；附着失败（如坏管道句柄误报 0）则退回直写。
+                    if (AttachParentConsole())
+                    {
+                        HelpTrace("inherited console handle without attach: attached parent console");
+                        return false;
+                    }
+                    HelpTrace($"AttachConsole failed err={Marshal.GetLastWin32Error()}, fallback to direct write");
+                }
+                return false; // 管道/文件/已附着：直接写
             }
 
+            if (AttachParentConsole())
+                return false; // 附着父控制台（PowerShell 等）
+
             AllocConsole(); // 双击启动：新开控制台窗口
-            ResetConsoleWriters();
+            BindConsoleOutput();
             return true;
+        }
+
+        /// <summary>
+        /// 附着父进程的控制台并绑定输出。AttachConsole 在 Win7 上不保证更新 std handle，
+        /// 显式打开 CONOUT$ 确保拿到当前控制台的可写句柄。
+        /// </summary>
+        static bool AttachParentConsole()
+        {
+            if (!AttachConsole(ATTACH_PARENT_PROCESS))
+                return false;
+            BindConsoleOutput();
+            return true;
+        }
+
+        /// <summary>
+        /// 打开 CONOUT$ 作为 stdout（指向当前附着控制台），并重建 Console 缓存的 writer。
+        /// 必须带 GENERIC_READ：只写打开的句柄 GetConsoleMode 会失败，
+        /// .NET 据此把输出误判为重定向并强制 UTF-8，中文就会乱码。
+        /// </summary>
+        static void BindConsoleOutput()
+        {
+            var conout = CreateFileW("CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+            HelpTrace($"CONOUT$ handle=0x{conout.ToString("X")}" +
+                (conout == IntPtr.Zero || conout == (IntPtr)(-1) ? $" err={Marshal.GetLastWin32Error()}" : ""));
+            if (conout != IntPtr.Zero && conout != (IntPtr)(-1))
+                SetStdHandle(STD_OUTPUT_HANDLE, conout);
+            ResetConsoleWriters();
         }
 
         /// <summary>
@@ -251,6 +337,22 @@ namespace SSHServer
             var encoding = Console.OutputEncoding;
             Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), encoding) { AutoFlush = true });
             Console.SetError(new StreamWriter(Console.OpenStandardError(), encoding) { AutoFlush = true });
+        }
+
+        /// <summary>
+        /// help 路径诊断日志（exe 同目录 log\help_trace.log）。RunHelp 的输出环节在无控制台/
+        /// 句柄不可写等场景下静默失败过，留下痕迹便于远程排查。
+        /// </summary>
+        static void HelpTrace(string msg)
+        {
+            try
+            {
+                var dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "log");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.AppendAllText(Path.Combine(dir, "help_trace.log"),
+                    $"{DateTime.Now:yyyy/MM/dd HH:mm:ss.fff}|{msg}{Environment.NewLine}", Encoding.UTF8);
+            }
+            catch { }
         }
 
         /// <summary>
