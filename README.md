@@ -834,6 +834,15 @@ WinSimpleSSH/
 
 ## 更新日志
 
+### v1.8.1 (2026-08-25)
+
+**修复 Win7 下帮助命令无输出：**
+- 修复 Win7（csrss 控制台架构）中从 cmd 直接运行 `SSHServer.exe -h` 无任何输出的问题：GUI 子系统进程继承 cmd 的控制台伪句柄（0x7）后，.NET 将其误判为重定向句柄，`OpenStandardOutput` 返回空流，`WriteLine` 静默丢弃且不抛异常；Win8+（ConDrv 架构）继承句柄真实可写故不受影响
+- 修复方式：检测到"句柄有效 + `GetFileType` 返回 UNKNOWN(0) 或 CHAR(2) + 进程未附着任何控制台（`GetConsoleWindow` 为空）"时，先 `AttachConsole` 附着父控制台，再以读写权限打开 CONOUT$ 重绑 stdout 后输出；管道/文件/已附着场景保持直写不变
+- 附着绑定的 CONOUT$ 必须带 GENERIC_READ：只写权限打开会使 `GetConsoleMode` 失败，导致 .NET 再次误判重定向并强制 UTF-8，中文乱码
+- help 路径全程写诊断日志到 exe 同目录 `log\help_trace.log`（句柄值、句柄类型、附着与重绑结果），不再静默吞异常，便于现场排查
+- 排查过程中确认：v1.7.2 及更早版本没有帮助功能，`-h` 被当作未知参数走静默后台模式并驻留进程，升级前请先结束旧进程
+
 ### v1.8.0 (2026-08-17)
 
 **服务端帮助命令：**
