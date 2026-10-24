@@ -295,6 +295,7 @@ namespace SSHClient.Core
             _ws?.Close();
         }
 
-        public bool IsConnected => _ws?.IsAlive == true;
+        // IsAlive 会同步发送 Ping；输入循环频繁检查时只读取本地连接状态。
+        public bool IsConnected => _ws?.ReadyState == WebSocketState.Open;
     }
 }

@@ -22,5 +22,12 @@ tests/
 ├── 14-error-args.bat                  # 异常：参数缺失
 ├── 15-encoding-restore.bat            # 非交互退出后控制台代码页恢复（无需 server）
 ├── 16-server-help.bat                 # SSHServer help 各变体（-h、--help、-?、/?）打印用法即退出（无需 server）
+├── 17-interactive-disconnect.ps1      # 交互：服务端断开后无需按键自动退出（自建临时本地服务端）
 └── README.md                          # 本文件
+```
+
+断线回归测试先构建项目，再运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1
 ```

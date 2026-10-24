@@ -171,6 +171,9 @@ namespace SSHClient
                 Console.Write("\nssh> ");
                 var input = ReadLineWithHistory(history, ref historyIndex, shell);
 
+                if (!shell.IsConnected)
+                    break;
+
                 if (string.IsNullOrEmpty(input))
                     continue;
 
@@ -416,8 +419,15 @@ namespace SSHClient
             var line = "";
             var cursorPos = 0;
 
-            while (true)
+            while (shell.IsConnected)
             {
+                // ReadKey 会一直阻塞；等待按键时也要检查连接，让断线能自动退出。
+                if (!Console.KeyAvailable)
+                {
+                    Thread.Sleep(50);
+                    continue;
+                }
+
                 var key = Console.ReadKey(true);
 
                 if (key.Key == ConsoleKey.Enter)
@@ -489,6 +499,8 @@ namespace SSHClient
                     RedrawLine(line, cursorPos);
                 }
             }
+
+            return null;
         }
 
         static void RedrawLine(string line, int cursorPos)
