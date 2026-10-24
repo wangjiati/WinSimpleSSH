@@ -85,8 +85,10 @@ namespace SSHClient.Core
                         transferError = signal.Substring("TRANSFER_FAIL:".Length);
                 });
                 shell.Upload(localPath, remotePath);
-                if (!transferDone.WaitOne(ExecTimeoutMs))
+                if (!shell.WaitForSignal(transferDone, ExecTimeoutMs))
                 {
+                    if (!shell.IsConnected)
+                        return FinishWithError(result, sw, "connection_lost", "Server disconnected before upload completed");
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Upload completion signal not received");
                 }
@@ -98,8 +100,9 @@ namespace SSHClient.Core
             }
             catch (Exception ex)
             {
+                var errorKind = shell.IsConnected ? "protocol_error" : "connection_lost";
                 TryDisconnect(shell);
-                return FinishWithError(result, sw, "protocol_error", $"Upload failed: {ex.Message}");
+                return FinishWithError(result, sw, errorKind, $"Upload failed: {ex.Message}");
             }
 
             TryDisconnect(shell);
@@ -161,8 +164,13 @@ namespace SSHClient.Core
             try
             {
                 shell.Download(remotePath, localPath);
-                if (!transferDone.WaitOne(ExecTimeoutMs))
+                if (!shell.WaitForSignal(transferDone, ExecTimeoutMs))
                 {
+                    if (!shell.IsConnected)
+                    {
+                        downloadState?.Dispose();
+                        return FinishWithError(result, sw, "connection_lost", "Server disconnected before download completed");
+                    }
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Download completion signal not received");
                 }
@@ -174,8 +182,10 @@ namespace SSHClient.Core
             }
             catch (Exception ex)
             {
+                var errorKind = shell.IsConnected ? "protocol_error" : "connection_lost";
+                downloadState?.Dispose();
                 TryDisconnect(shell);
-                return FinishWithError(result, sw, "protocol_error", $"Download failed: {ex.Message}");
+                return FinishWithError(result, sw, errorKind, $"Download failed: {ex.Message}");
             }
 
             TryDisconnect(shell);
@@ -242,16 +252,19 @@ namespace SSHClient.Core
                 var req = new UpdateRequest { Source = source, Checksum = checksum };
                 shell.SendRaw(new ProtocolMessage(MessageType.UpdateRequest, JsonConvert.SerializeObject(req)).ToJson());
 
-                if (!transferDone.WaitOne(ExecTimeoutMs))
+                if (!shell.WaitForSignal(transferDone, ExecTimeoutMs))
                 {
+                    if (!shell.IsConnected)
+                        return FinishWithError(result, sw, "connection_lost", "Server disconnected before update response was received");
                     TryDisconnect(shell);
                     return FinishWithError(result, sw, "protocol_error", "Update response not received");
                 }
             }
             catch (Exception ex)
             {
+                var errorKind = shell.IsConnected ? "protocol_error" : "connection_lost";
                 TryDisconnect(shell);
-                return FinishWithError(result, sw, "protocol_error", $"Update failed: {ex.Message}");
+                return FinishWithError(result, sw, errorKind, $"Update failed: {ex.Message}");
             }
 
             TryDisconnect(shell);
@@ -313,10 +326,13 @@ namespace SSHClient.Core
                 return false;
             }
 
-            if (!authResult.WaitOne(AuthTimeoutMs))
+            if (!shell.WaitForSignal(authResult, AuthTimeoutMs))
             {
+                var disconnected = !shell.IsConnected;
                 TryDisconnect(shell);
-                errorCode = FinishWithError(result, sw, "connection_timeout", "Handshake timed out");
+                errorCode = FinishWithError(result, sw,
+                    disconnected ? "connection_lost" : "connection_timeout",
+                    disconnected ? "Server disconnected during authentication" : "Handshake timed out");
                 return false;
             }
 
@@ -386,10 +402,13 @@ namespace SSHClient.Core
                 return FinishWithError(result, sw, "connection_refused", $"Failed to reach {_host}:{_port}");
 
             // 3) 等待认证结果
-            if (!authResult.WaitOne(AuthTimeoutMs))
+            if (!shell.WaitForSignal(authResult, AuthTimeoutMs))
             {
+                var disconnected = !shell.IsConnected;
                 TryDisconnect(shell);
-                return FinishWithError(result, sw, "connection_timeout", "Handshake timed out");
+                return FinishWithError(result, sw,
+                    disconnected ? "connection_lost" : "connection_timeout",
+                    disconnected ? "Server disconnected during authentication" : "Handshake timed out");
             }
 
             if (!authOk)
@@ -445,8 +464,18 @@ namespace SSHClient.Core
                 shell.SendInput(payload);
 
                 // 6) 等待 end marker 出现
-                if (!capture.WaitForCompletion(commandTimeoutMs))
+                if (!shell.WaitForSignal(capture.CompletionWaitHandle, commandTimeoutMs))
                 {
+                    if (!shell.IsConnected)
+                    {
+                        result.Stdout = capture.IsPhase1Done
+                            ? StripEchoedCommands(capture.Stdout, realCmd, $"echo {endMarkerPrefix}%ERRORLEVEL%__")
+                            : "";
+                        result.Stderr = capture.Stderr;
+                        return FinishWithError(result, sw, "connection_lost",
+                            "Server disconnected before command completion; remote exit status is unknown");
+                    }
+
                     // start 动词是 fire-and-forget 语义：只要 cmd.exe 确实收到并执行了我们的 payload
                     // （phase 1 begin marker 已出现），就假定 start 的目标程序已 detach 成功，返回 0
                     if (wrapForDetach && capture.IsPhase1Done)
@@ -552,6 +581,7 @@ namespace SSHClient.Core
             switch (errKind)
             {
                 case "connection_refused":
+                case "connection_lost":
                 case "connection_timeout": return ExitCodes.ConnectionFailed;
                 case "auth_failed":        return ExitCodes.AuthFailed;
                 case "interrupted":        return ExitCodes.Interrupted;

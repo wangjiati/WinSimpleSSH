@@ -16,6 +16,8 @@ namespace SSHClient.Core
         private Action<string, bool> _onShellOutput;  // (text, isStderr) — 非交互模式拦截 Shell 输出
         private readonly object _sendLock = new object();
         private readonly object _uploadLock = new object();
+        private readonly object _messageLock = new object();
+        private readonly System.Threading.ManualResetEvent _disconnected = new System.Threading.ManualResetEvent(false);
         private bool _uploadReady;
 
         private void SafeSend(string data)
@@ -29,6 +31,7 @@ namespace SSHClient.Core
 
         public void Connect(string host, int port, string username, string password)
         {
+            _disconnected.Reset();
             var url = $"ws://{host}:{port}/";
             _ws = new WebSocket(url);
 
@@ -39,15 +42,28 @@ namespace SSHClient.Core
 
             _ws.OnMessage += (sender, e) =>
             {
-                if (e.RawData == null || e.RawData.Length == 0) return;
-                var raw = Encoding.UTF8.GetString(Obfuscator.Decode(e.RawData));
-                HandleMessage(raw);
+                lock (_messageLock)
+                {
+                    if (_disconnected.WaitOne(0) || e.RawData == null || e.RawData.Length == 0) return;
+                    var raw = Encoding.UTF8.GetString(Obfuscator.Decode(e.RawData));
+                    HandleMessage(raw);
+                }
             };
 
             _ws.OnClose += (sender, e) =>
             {
-                StopHeartbeat();
-                Console.Error.WriteLine("\nDisconnected from server. / 已与服务端断开连接");
+                // OnClose 可与 OnMessage 并发；先等正在处理的最终结果完成，
+                // 再唤醒等待者，避免丢输出或与下载资源清理发生竞争。
+                lock (_messageLock)
+                {
+                    StopHeartbeat();
+                    Console.Error.WriteLine("\nDisconnected from server. / 已与服务端断开连接");
+                    _disconnected.Set();
+                    lock (_uploadLock)
+                    {
+                        System.Threading.Monitor.PulseAll(_uploadLock);
+                    }
+                }
             };
 
             _ws.OnError += (sender, e) =>
@@ -79,6 +95,13 @@ namespace SSHClient.Core
         public void SetSignalHandler(Action<string> handler)
         {
             _onSignal = handler;
+        }
+
+        /// <summary>等待操作完成或连接关闭；完成信号优先，避免丢弃断线前已确认的结果。</summary>
+        public bool WaitForSignal(System.Threading.WaitHandle completed, int timeoutMs)
+        {
+            return System.Threading.WaitHandle.WaitAny(
+                new[] { completed, _disconnected }, timeoutMs) == 0;
         }
 
         /// <summary>
@@ -253,8 +276,11 @@ namespace SSHClient.Core
                 // 等待服务端确认文件可写（UploadReady），最多等 10 秒
                 lock (_uploadLock)
                 {
-                    if (!_uploadReady)
+                    if (!_uploadReady && IsConnected)
                         System.Threading.Monitor.Wait(_uploadLock, 10000);
+
+                    if (!IsConnected)
+                        return;
 
                     if (!_uploadReady)
                     {
@@ -269,7 +295,8 @@ namespace SSHClient.Core
             }
             finally
             {
-                StartHeartbeat();
+                if (IsConnected)
+                    StartHeartbeat();
             }
         }
 

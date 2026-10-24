@@ -491,13 +491,15 @@ SSHC.exe update 192.168.1.100 -u admin -p admin123 --source \\share\updates\SSHS
 
 | 字段 | 说明 |
 |------|------|
-| `ok` | 连接 + 认证是否成功（**不**反映命令本身的 exit_code） |
+| `ok` | 连接、认证及协议交互是否成功（**不**反映命令本身的 exit_code） |
 | `verb` | `exec` / `start` / `upload` / `download` |
 | `exit_code` | 远程 `%ERRORLEVEL%`，连接层失败时为 `null` |
 | `stdout` / `stderr` | 命令输出，已剥离回显行 |
 | `duration_ms` | 进程从启动到结束的总耗时 |
-| `error.kind` | `connection_refused` / `connection_timeout` / `auth_failed` / `protocol_error` / `marker_not_found` / `interrupted` |
+| `error.kind` | `connection_refused` / `connection_timeout` / `connection_lost` / `auth_failed` / `protocol_error` / `marker_not_found` / `interrupted` |
 | `timestamp` | ISO 8601 |
+
+执行期间服务端断开（例如远程命令终止了服务端进程）时，客户端会及时结束等待并以 `255` 退出，保留断线前收到的输出。JSON 的 `error.kind` 为 `connection_lost`，远端退出码尚未收到时 `exit_code` 为 `null`。若断线前已收到完整结果，则保留该结果。
 
 #### Python 调用示例（AI Agent 场景）
 

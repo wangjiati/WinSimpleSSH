@@ -44,7 +44,7 @@ namespace SSHClient.Core
     public class ErrorDetail
     {
         /// <summary>
-        /// 错误类别枚举：connection_refused / connection_timeout / auth_failed /
+        /// 错误类别枚举：connection_refused / connection_timeout / connection_lost / auth_failed /
         /// protocol_error / marker_not_found / interrupted
         /// </summary>
         [JsonProperty("kind")]

@@ -111,11 +111,8 @@ namespace SSHClient.Core
             }
         }
 
-        /// <summary>阻塞等待命令结束标记出现，超时返回 false。</summary>
-        public bool WaitForCompletion(int timeoutMs)
-        {
-            return _completed.Wait(timeoutMs);
-        }
+        /// <summary>命令结束标记的等待句柄，供调用方同时等待完成或断线。</summary>
+        public WaitHandle CompletionWaitHandle => _completed.WaitHandle;
 
         /// <summary>phase 1 是否已完成（begin marker 已出现）——供调用方判断 cmd.exe 是否收到命令。</summary>
         public bool IsPhase1Done

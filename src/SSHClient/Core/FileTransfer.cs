@@ -20,7 +20,7 @@ namespace SSHClient.Core
         /// </summary>
         public static bool Quiet { get; set; }
 
-        /// <summary>发送上传开始消息，返回是否成功读取本地文件</summary>
+        /// <summary>检查本地文件并发送上传开始消息，断线时返回 false。</summary>
         public static bool SendUploadStart(object sendLock, WebSocket ws, string localPath, string remotePath)
         {
             if (!File.Exists(localPath))
@@ -41,7 +41,8 @@ namespace SSHClient.Core
                     TotalChunks = totalChunks,
                     RemotePath = remotePath ?? Path.GetFileName(localPath)
                 }));
-            SendLocked(sendLock, ws, startMsg.ToJson());
+            if (!SendLocked(sendLock, ws, startMsg.ToJson()))
+                return false;
 
             _pendingUploadInfo = fileInfo;
             return true;
@@ -77,7 +78,8 @@ namespace SSHClient.Core
                             Index = i,
                             Data = Convert.ToBase64String(buffer, 0, read)
                         }));
-                    SendLocked(sendLock, ws, chunkMsg.ToJson());
+                    if (!SendLocked(sendLock, ws, chunkMsg.ToJson()))
+                        return;
 
                     transferred += read;
                     var progress = totalChunks == 0 ? 1.0 : (double)(i + 1) / totalChunks;
@@ -105,12 +107,14 @@ namespace SSHClient.Core
             SendLocked(sendLock, ws, startMsg.ToJson());
         }
 
-        private static void SendLocked(object sendLock, WebSocket ws, string data)
+        private static bool SendLocked(object sendLock, WebSocket ws, string data)
         {
             lock (sendLock)
             {
-                if (ws?.IsAlive == true)
-                    ws.Send(Obfuscator.Encode(Encoding.UTF8.GetBytes(data)));
+                if (ws?.ReadyState != WebSocketState.Open)
+                    return false;
+                ws.Send(Obfuscator.Encode(Encoding.UTF8.GetBytes(data)));
+                return true;
             }
         }
 

@@ -22,7 +22,7 @@ tests/
 ├── 14-error-args.bat                  # 异常：参数缺失
 ├── 15-encoding-restore.bat            # 非交互退出后控制台代码页恢复（无需 server）
 ├── 16-server-help.bat                 # SSHServer help 各变体（-h、--help、-?、/?）打印用法即退出（无需 server）
-├── 17-interactive-disconnect.ps1      # 交互：服务端断开后无需按键自动退出（自建临时本地服务端）
+├── 17-interactive-disconnect.ps1      # 交互及 exec：服务端断开后及时退出（自建临时本地服务端）
 └── README.md                          # 本文件
 ```
 
@@ -30,4 +30,12 @@ tests/
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1 -Mode Exec
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1 -Mode ExecJson
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1 -Mode Upload
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconnect.ps1 -Mode MessageRace
 ```
+
+`Exec` 和 `ExecJson` 模式通过远端命令终止临时服务端，验证客户端及时以 `255` 退出并保留断线前的输出。
+
+`Upload` 验证正常上传、下载及上传中途断线，临时创建一个逻辑大小为 2 GB 的文件并在结束后删除。`MessageRace` 验证断线不会抢在正在处理的输出回调前结束等待，需要 .NET Framework 自带的 C# 编译器来构建测试辅助类。
