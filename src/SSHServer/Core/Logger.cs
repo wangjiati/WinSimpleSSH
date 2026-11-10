@@ -62,13 +62,22 @@ namespace SSHServer.Core
             Write(LogLevel.Error, $"{message}: {ex.GetType().Name} - {ex.Message}");
         }
 
+        // 日志注入防护：用户名、命令、路径都来自客户端，未清洗的 \r\n
+        // 可以伪造出完整的时间戳/级别前缀，让审计记录失真。
+        private static string Sanitize(string message)
+        {
+            if (string.IsNullOrEmpty(message)) return message;
+            if (message.IndexOf('\r') < 0 && message.IndexOf('\n') < 0) return message;
+            return message.Replace('\r', ' ').Replace('\n', ' ');
+        }
+
         public static void Write(LogLevel level, string message)
         {
             if (level < _minLevel) return;
 
             var timestamp = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss");
             var levelStr = level.ToString().ToUpper().PadRight(5);
-            var line = $"{timestamp}|{levelStr}|{message}";
+            var line = $"{timestamp}|{levelStr}|{Sanitize(message)}";
 
             // 控制台输出带颜色
             var oldColor = Console.ForegroundColor;

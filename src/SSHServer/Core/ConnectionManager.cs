@@ -301,9 +301,38 @@ namespace SSHServer.Core
 
         private void HandleAuth(string data)
         {
-            var req = JsonConvert.DeserializeObject<AuthRequest>(data);
+            // 解析失败或缺少用户名时不能继续往下走：req 为 null 会在下面第一行
+            // 反序列化后直接空引用，OnMessage 又没有兜底 try/catch，会话会被异常
+            // 打断且日志里没有任何记录。
+            AuthRequest req = null;
+            try
+            {
+                req = JsonConvert.DeserializeObject<AuthRequest>(data);
+            }
+            catch (JsonException)
+            {
+            }
 
-            foreach (var user in _sharedConfig.Users)
+            if (req == null || string.IsNullOrEmpty(req.Username))
+            {
+                SLog.Warn($"[Auth] 认证失败 / Authentication failed: malformed request from {_session.RemoteEndpoint}");
+                _session.Send(new ProtocolMessage(MessageType.AuthResponse,
+                    JsonConvert.SerializeObject(new AuthResponse { Success = false, Message = "Invalid credentials" })));
+                return;
+            }
+
+            // server.json 写成 "users": null 时 Users 为 null，直接 foreach 会抛
+            // NullReferenceException：客户端只能等到超时，日志里也没有失败记录。
+            var users = _sharedConfig.Users;
+            if (users == null || users.Count == 0)
+            {
+                SLog.Error($"[Auth] 未配置任何用户，拒绝登录 / No users configured, rejecting login from {_session.RemoteEndpoint}");
+                _session.Send(new ProtocolMessage(MessageType.AuthResponse,
+                    JsonConvert.SerializeObject(new AuthResponse { Success = false, Message = "Invalid credentials" })));
+                return;
+            }
+
+            foreach (var user in users)
             {
                 if (user.Username == req.Username && user.Password == req.Password)
                 {
@@ -313,11 +342,14 @@ namespace SSHServer.Core
                         JsonConvert.SerializeObject(new AuthResponse { Success = true, Message = "Authenticated" })));
                     StartShell();
 
-                    SLog.Info($"[Auth] {_session.ShortId} authenticated as {req.Username}");
+                    SLog.Info($"[Auth] {_session.ShortId} authenticated as {req.Username} from {_session.RemoteEndpoint}");
                     return;
                 }
             }
 
+            // 失败必须留痕：否则暴力尝试在服务端日志里完全不可见。
+            // 只记录用户名和来源端点，绝不写密码。
+            SLog.Warn($"[Auth] 认证失败 / Authentication failed: user='{req.Username}' from {_session.RemoteEndpoint}");
             _session.Send(new ProtocolMessage(MessageType.AuthResponse,
                 JsonConvert.SerializeObject(new AuthResponse { Success = false, Message = "Invalid credentials" })));
         }
