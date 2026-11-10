@@ -117,6 +117,42 @@ try {
         throw ('FAIL: server stopped accepting logins after a failed attempt (exit ' + $client.ExitCode + ').')
     }
     Write-Output 'PASS: server still accepts a valid login after the failed attempt.'
+
+    # A server.json with "users": null used to throw NullReferenceException on
+    # login and leave the client waiting for the timeout. It must reject the
+    # attempt, log it, and stay alive.
+    Stop-TestProcessTree $server
+    $server = $null
+    Stop-TestProcessTree $client
+    $client = $null
+    Set-Content -LiteralPath (Join-Path $testDir 'server.json') -Encoding UTF8 -Value (
+        '{"port":' + $port + ',"ipWhitelist":["127.0.0.1"],"users":null}')
+    $server = Start-Process -FilePath (Join-Path $testDir 'SSHServer.exe') -WorkingDirectory $testDir -WindowStyle Hidden -PassThru
+    Wait-Until {
+        if ($server.HasExited) { throw 'Server with users=null exited before listening.' }
+        $probe = New-Object Net.Sockets.TcpClient
+        try {
+            $probe.Connect('127.0.0.1', $port)
+            return $true
+        } catch {
+            return $false
+        } finally {
+            $probe.Close()
+        }
+    } 'Server with users=null did not start listening.'
+
+    $client = Start-Process -FilePath $clientExe -ArgumentList @(
+        'exec', '127.0.0.1', '--port', $port, '-u', 'admin', '-p', 'admin123', '-q', '"echo never_runs"'
+    ) -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $null = $client.Handle
+    if (!$client.WaitForExit(10000)) { throw 'Login against users=null hung instead of being rejected.' }
+    if ($client.ExitCode -ne 254) {
+        throw ('FAIL: users=null should reject with 254, got ' + $client.ExitCode)
+    }
+    Wait-Until {
+        return (Read-TestLog $logPath).Contains('No users configured')
+    } 'users=null was not reported in the server log.'
+    Write-Output 'PASS: users=null rejects the login and logs it instead of crashing.'
 } catch {
     if ($stdout -and (Test-Path -LiteralPath $stdout)) { Write-Output (Read-TestLog $stdout) }
     if ($stderr -and (Test-Path -LiteralPath $stderr)) { Write-Output (Read-TestLog $stderr) }
