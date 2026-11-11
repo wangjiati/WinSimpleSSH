@@ -79,6 +79,11 @@ namespace SSHServer
             var weak = new List<string>();
             foreach (var user in config.Users)
             {
+                if (user == null)
+                {
+                    SLog.Warn("server.json 包含空用户项，已忽略 / Ignoring null user entry in server.json");
+                    continue;
+                }
                 if (string.IsNullOrEmpty(user.Password))
                 {
                     weak.Add($"{user.Username}(空密码/empty)");

@@ -307,7 +307,10 @@ namespace SSHServer.Core
             AuthRequest req = null;
             try
             {
-                req = JsonConvert.DeserializeObject<AuthRequest>(data);
+                // 缺失 data 或 data:null 会让 JsonConvert 抛 ArgumentNullException，
+                // 统一交给下面的认证失败分支，避免异常绕过响应与审计日志。
+                if (!string.IsNullOrWhiteSpace(data))
+                    req = JsonConvert.DeserializeObject<AuthRequest>(data);
             }
             catch (JsonException)
             {
@@ -334,6 +337,7 @@ namespace SSHServer.Core
 
             foreach (var user in users)
             {
+                if (user == null) continue;
                 if (user.Username == req.Username && user.Password == req.Password)
                 {
                     _session.IsAuthenticated = true;
