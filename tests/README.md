@@ -23,6 +23,7 @@ tests/
 ├── 15-encoding-restore.bat            # 非交互退出后控制台代码页恢复（无需 server）
 ├── 16-server-help.bat                 # SSHServer help 各变体（-h、--help、-?、/?）打印用法即退出（无需 server）
 ├── 17-interactive-disconnect.ps1      # 交互及 exec：服务端断开后及时退出（自建临时本地服务端）
+├── 18-interactive-long-input.ps1      # 长命令输入、编辑、历史召回及宽字符（独立真实控制台）
 └── README.md                          # 本文件
 ```
 
@@ -39,3 +40,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/17-interactive-disconn
 `Exec` 和 `ExecJson` 模式通过远端命令终止临时服务端，验证客户端及时以 `255` 退出并保留断线前的输出。
 
 `Upload` 验证正常上传、下载及上传中途断线，临时创建一个逻辑大小为 2 GB 的文件并在结束后删除。`MessageRace` 验证断线不会抢在正在处理的输出回调前结束等待，需要 .NET Framework 自带的 C# 编译器来构建测试辅助类。
+
+长命令回归测试先构建项目，再运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/18-interactive-long-input.ps1
+```
+
+该测试自建临时本地服务端，编译 `ConsoleInputProbe.cs`，在隐藏的独立 Windows 控制台中注入按键，覆盖 120、80、40 列宽度下的输入、左右移动、退格、历史召回、清除旧文本、缓冲区底部和中文宽字符，并验证窗口窄于缓冲区时光标仍在可见行内。长命令采用横向滚动显示，测试会核对返回的完整命令，确保没有截断。测试不向当前终端发送按键，结束后清理临时进程和文件。

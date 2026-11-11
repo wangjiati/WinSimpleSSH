@@ -481,7 +481,7 @@ namespace SSHClient
                     if (cursorPos > 0)
                     {
                         cursorPos--;
-                        Console.SetCursorPosition(Console.CursorLeft - 1, Console.CursorTop);
+                        RedrawLine(line, cursorPos);
                     }
                 }
                 else if (key.Key == ConsoleKey.RightArrow)
@@ -489,7 +489,7 @@ namespace SSHClient
                     if (cursorPos < line.Length)
                     {
                         cursorPos++;
-                        Console.SetCursorPosition(Console.CursorLeft + 1, Console.CursorTop);
+                        RedrawLine(line, cursorPos);
                     }
                 }
                 else if (!char.IsControl(key.KeyChar))
@@ -505,9 +505,38 @@ namespace SSHClient
 
         static void RedrawLine(string line, int cursorPos)
         {
-            Console.Write("\r" + new string(' ', Console.WindowWidth - 1) + "\r");
-            Console.Write("ssh> " + line);
-            Console.SetCursorPosition(5 + cursorPos, Console.CursorTop);
+            // 只显示光标附近的一段，完整命令仍保留在 line 中。预留最后一列，
+            // 避免写到右边界时自动换行（尤其是在缓冲区最后一行）。
+            int width = Math.Min(Console.WindowWidth, Console.BufferWidth) - 1;
+            if (width <= 0) return;
+            string prompt = "ssh> ".Substring(0, Math.Min(5, width - 1));
+            int available = width - prompt.Length;
+            int start = cursorPos;
+            int cells = 0;
+            while (start > 0)
+            {
+                // 非 ASCII 字符保守预留两列，兼容中文宽字符和 UTF-16 代理项。
+                int size = line[start - 1] <= 0x7f ? 1 : 2;
+                if (cells + size >= available) break;
+                cells += size;
+                start--;
+            }
+            int end = cursorPos;
+            while (end < line.Length)
+            {
+                int size = line[end] <= 0x7f ? 1 : 2;
+                if (cells + size > available) break;
+                cells += size;
+                end++;
+            }
+
+            Console.Write("\r" + new string(' ', width) + "\r");
+            int row = Console.CursorTop;
+            Console.Write(prompt + line.Substring(start, cursorPos - start));
+            // 从控制台读取实际列号，不能用字符数量推算中文等字符的显示宽度。
+            int column = Console.CursorLeft;
+            Console.Write(line.Substring(cursorPos, end - cursorPos));
+            Console.SetCursorPosition(column, row);
         }
 
         static string ReadPassword()
