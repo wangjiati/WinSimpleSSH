@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Security.Principal;
@@ -51,11 +52,57 @@ namespace SSHServer
                 SLog.Warn("IP 白名单未配置，允许所有 IP 连接 / IP whitelist not configured, all IPs allowed");
             }
 
+            // 弱口令告警：server.json 缺失时会自动生成 admin/admin123，
+            // 直接用在生产环境等同于没有认证。这里只输出用户名，不输出密码。
+            WarnOnWeakCredentials(config);
+
             // 记录管理员权限状态
             var isAdmin = IsRunningAsAdmin();
             SLog.Info(isAdmin
                 ? "服务端以管理员权限运行 / Running as Administrator"
                 : "服务端以普通权限运行 / Running as standard user");
+        }
+
+        private static readonly string[] WellKnownDefaultPasswords =
+        {
+            "admin123", "user123", "123456", "12345678", "password", "admin"
+        };
+
+        private static void WarnOnWeakCredentials(ServerConfig config)
+        {
+            if (config.Users == null || config.Users.Count == 0)
+            {
+                SLog.Error("server.json 未配置任何用户，客户端将无法登录 / No users configured, nobody can log in");
+                return;
+            }
+
+            var weak = new List<string>();
+            foreach (var user in config.Users)
+            {
+                if (user == null)
+                {
+                    SLog.Warn("server.json 包含空用户项，已忽略 / Ignoring null user entry in server.json");
+                    continue;
+                }
+                if (string.IsNullOrEmpty(user.Password))
+                {
+                    weak.Add($"{user.Username}(空密码/empty)");
+                }
+                else if (string.Equals(user.Username, user.Password, StringComparison.OrdinalIgnoreCase))
+                {
+                    weak.Add($"{user.Username}(用户名=密码/username=password)");
+                }
+                else if (Array.IndexOf(WellKnownDefaultPasswords, user.Password.ToLowerInvariant()) >= 0)
+                {
+                    weak.Add($"{user.Username}(默认口令/default password)");
+                }
+            }
+
+            if (weak.Count > 0)
+            {
+                SLog.Warn("检测到弱口令，生产环境请修改 server.json / Weak credentials detected: "
+                    + string.Join(", ", weak));
+            }
         }
 
         private bool IsRunningAsAdmin()
