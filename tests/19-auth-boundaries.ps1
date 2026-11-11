@@ -100,6 +100,22 @@ try {
             } 'Malformed authentication was not logged with its remote endpoint.'
             Write-Output ('PASS: ' + $frame.Name + ' returns failed AuthResponse and an audit entry.')
         }
+        $marker = 'injected-auth-record'
+        $attemptedPassword = 'auth-log-password-must-not-appear-7x3'
+        $payload = @{
+            username = "boundary-user`r`n2026/11/11 00:00:00|INFO |$marker"
+            password = $attemptedPassword
+        } | ConvertTo-Json -Compress
+        $frame = @{ type = 0; data = $payload } | ConvertTo-Json -Compress
+        [AuthRequestProbe]::ExpectRejection($port, $frame)
+        Wait-Until { return (Read-TestLog $logPath).Contains($marker) } 'Crafted username was not audited.'
+        $log = Read-TestLog $logPath
+        $records = @($log -split '[\r\n]' | Where-Object { $_.Contains($marker) })
+        if ($records.Count -ne 1 -or $records[0] -notmatch "^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\|WARN\s*\|\[Auth\].*user='boundary-user.* from 127\.0\.0\.1:\d+\s*$") {
+            throw 'FAIL: a username containing CR/LF forged a separate audit-log record.'
+        }
+        if ($log.Contains($attemptedPassword)) { throw 'FAIL: the attempted password leaked into the audit log.' }
+        Write-Output 'PASS: CR/LF in a username stays in one failed-auth record without exposing the password.'
         Expect-Login 0
         Write-Output 'PASS: valid authentication still works after malformed requests.'
         Stop-TestProcess $server

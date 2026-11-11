@@ -93,15 +93,11 @@ try {
     }
 
     Wait-Until {
-        return (Read-TestLog $logPath).Contains("user='admin'")
+        return @((Read-TestLog $logPath) -split '\r?\n' | Where-Object {
+            $_ -match "\[Auth\].*Authentication failed: user='admin' from 127\.0\.0\.1:\d+\s*$"
+        }).Count -eq 1
     } 'Failed authentication was not written to the server log.'
     $log = Read-TestLog $logPath
-    if (!$log.Contains('Authentication failed')) {
-        throw 'FAIL: failed authentication log entry is missing its message.'
-    }
-    if (!$log.Contains('127.0.0.1')) {
-        throw 'FAIL: failed authentication log entry has no remote endpoint.'
-    }
     if ($log.Contains($wrongPassword)) {
         throw 'FAIL: the attempted password leaked into the server log.'
     }
@@ -116,7 +112,12 @@ try {
     if ($client.ExitCode -ne 0 -or !(Read-TestLog $stdout).Contains('auth_after_failure_ok')) {
         throw ('FAIL: server stopped accepting logins after a failed attempt (exit ' + $client.ExitCode + ').')
     }
-    Write-Output 'PASS: server still accepts a valid login after the failed attempt.'
+    Wait-Until {
+        return @((Read-TestLog $logPath) -split '\r?\n' | Where-Object {
+            $_ -match '\[Auth\].*authenticated as admin from 127\.0\.0\.1:\d+\s*$'
+        }).Count -eq 1
+    } 'Successful authentication was not logged with its remote endpoint.'
+    Write-Output 'PASS: server accepts a valid login after the failed attempt and audits its endpoint.'
 
     # A server.json with "users": null used to throw NullReferenceException on
     # login and leave the client waiting for the timeout. It must reject the

@@ -58,6 +58,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/18-auth-audit-log.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/19-auth-boundaries.ps1
 ```
 
-`18-auth-audit-log.ps1` 验证默认密码告警、失败登录的用户名与端点记录、密码不写入日志、失败后正常登录，以及 `users: null` 的及时拒绝。
+`18-auth-audit-log.ps1` 验证默认密码告警、成功和失败登录各自日志行中的用户名与端点记录、密码不写入日志、失败后正常登录，以及 `users: null` 的及时拒绝。
 
-该测试使用随机回环端口和独立临时服务端，编译 `AuthRequestProbe.cs`，通过真实 WebSocket 连接发送缺失 `data`、`data: null`、空字符串、JSON `null`、无效 JSON 及缺失用户名的认证报文，验证每次均返回认证失败响应并记录来源端点，随后核对正常账号仍可执行命令。配置测试覆盖 `users: [null, 有效用户, null]` 的启动、空项告警和正常登录，以及 `users: [null]` 的及时拒绝。可用 `-Mode MalformedAuth` 或 `-Mode NullEntries` 单独运行其中一组。
+`19-auth-boundaries.ps1` 使用随机回环端口和独立临时服务端，编译 `AuthRequestProbe.cs`，通过真实 WebSocket 连接发送缺失 `data`、`data: null`、空字符串、JSON `null`、无效 JSON 及缺失用户名的认证报文，验证每次均返回认证失败响应并记录来源端点，同时验证用户名中的 CR/LF 不会伪造日志行、密码不会写入日志，随后核对正常账号仍可执行命令。配置测试覆盖 `users: [null, 有效用户, null]` 的启动、空项告警和正常登录，以及 `users: [null]` 的及时拒绝。可用 `-Mode MalformedAuth` 或 `-Mode NullEntries` 单独运行其中一组。
